@@ -13,6 +13,7 @@ raw_news:
 clean_ohlcv:
   type: pandas.ParquetDataset
   filepath: data/02_intermediate/clean_ohlcv.parquet
+  versioned: true
 
 # ── PRIMARY ──────────────────────────────────────────
 technical_features:
@@ -42,3 +43,10 @@ backtest_metrics:
 equity_curve:
   type: plotly.PlotlyDataset
   filepath: data/08_reporting/equity_curve.html
+  plotly_args:
+    type: scatter
+    fig:
+      x: date
+      y: equity
+    layout:
+      title: Curva de Equity
