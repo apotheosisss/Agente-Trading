@@ -1,0 +1,44 @@
+# ── RAW ──────────────────────────────────────────────
+raw_ohlcv:
+  type: pandas.ParquetDataset
+  filepath: data/01_raw/ohlcv.parquet
+  versioned: true
+
+raw_news:
+  type: pandas.JSONDataset
+  filepath: data/01_raw/news.json
+  versioned: true
+
+# ── INTERMEDIATE ─────────────────────────────────────
+clean_ohlcv:
+  type: pandas.ParquetDataset
+  filepath: data/02_intermediate/clean_ohlcv.parquet
+
+# ── PRIMARY ──────────────────────────────────────────
+technical_features:
+  type: pandas.ParquetDataset
+  filepath: data/03_primary/technical_features.parquet
+
+sentiment_scores:
+  type: pandas.ParquetDataset
+  filepath: data/03_primary/sentiment_scores.parquet
+
+# ── FEATURE STORE ────────────────────────────────────
+feature_vector:
+  type: pandas.ParquetDataset
+  filepath: data/04_feature/feature_vector.parquet
+
+# ── MODEL OUTPUT ─────────────────────────────────────
+trading_signal:
+  type: pandas.JSONDataset
+  filepath: data/07_model_output/signal.json
+  versioned: true
+
+# ── REPORTING ────────────────────────────────────────
+backtest_metrics:
+  type: pandas.CSVDataset
+  filepath: data/08_reporting/metrics.csv
+
+equity_curve:
+  type: plotly.PlotlyDataset
+  filepath: data/08_reporting/equity_curve.html
