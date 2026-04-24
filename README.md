@@ -1,101 +1,199 @@
-# trading-agent
+# 🤖 Agente de Trading con IA
 
-[![Powered by Kedro](https://img.shields.io/badge/powered_by-kedro-ffc900?logo=kedro)](https://kedro.org)
+> Agente autónomo de inversión impulsado por modelos de lenguaje (LLM), con análisis técnico, análisis de sentimiento y backtesting. Arquitectura modular basada en Kedro.
 
-## Overview
+---
 
-This is your new Kedro project, which was generated using `kedro 1.3.1`.
+## 📋 Descripción General
 
-Take a look at the [Kedro documentation](https://docs.kedro.org) to get started.
+Sistema de trading algorítmico que utiliza múltiples agentes LLM especializados para analizar datos de mercado y generar señales de inversión (BUY / SELL / HOLD). El sistema integra indicadores técnicos cuantitativos con análisis de sentimiento de noticias financieras.
 
-## Rules and guidelines
+---
 
-In order to get the best out of the template:
-
-* Don't remove any lines from the `.gitignore` file we provide
-* Make sure your results can be reproduced by following a data engineering convention
-* Don't commit data to your repository
-* Don't commit any credentials or your local configuration to your repository. Keep all your credentials and local configuration in `conf/local/`
-
-## How to install dependencies
-
-Declare any dependencies in `requirements.txt` for `pip` installation.
-
-To install them, run:
+## 🏗️ Arquitectura
 
 ```
-pip install -r requirements.txt
+Fuentes externas (Yahoo Finance, NewsAPI)
+        │
+        ▼
+[Pipeline: ingestion]          → data/01_raw/, data/02_intermediate/
+        │
+        ▼
+[Pipeline: feature_engineering] → data/03_primary/, data/04_feature/
+        │
+        ▼
+[Pipeline: llm_agents]          → data/07_model_output/
+        │
+        ▼
+[Pipeline: backtesting]         → data/08_reporting/
+        │
+        ▼
+[Pipeline: execution]           → Órdenes (paper trading)
 ```
 
-## How to run your Kedro pipeline
+---
 
-You can run your Kedro project with:
+## 🛠️ Stack Tecnológico
+
+| Capa | Tecnología |
+|---|---|
+| Framework de pipelines | Kedro 1.3.1 |
+| Gestión de entorno | Astral UV |
+| Datos de mercado | yfinance |
+| Análisis técnico | pandas-ta |
+| Orquestador LLM | CrewAI |
+| Modelo LLM | GPT-4o-mini / Ollama |
+| NLP / Sentimiento | HuggingFace Transformers (FinBERT) |
+| Backtesting | VectorBT |
+| Seguimiento de experimentos | MLflow |
+| Visualización de pipelines | Kedro-Viz |
+| Dashboard | Streamlit |
+| Lenguaje | Python 3.12 |
+
+---
+
+## 📁 Estructura del Proyecto
 
 ```
+trading-agent/
+├── conf/
+│   ├── base/
+│   │   ├── catalog.yml         # Definición de datasets
+│   │   ├── parameters.yml      # Parámetros globales
+│   │   └── logging.yml         # Configuración de logs
+│   └── local/
+│       └── credentials.yml     # API keys (NO en Git)
+├── data/
+│   ├── 01_raw/                 # Datos crudos
+│   ├── 02_intermediate/        # Datos limpios
+│   ├── 03_primary/             # Features calculadas
+│   ├── 04_feature/             # Vector de features unificado
+│   ├── 07_model_output/        # Señales de trading
+│   └── 08_reporting/           # Métricas y reportes
+├── src/trading_agent/
+│   └── pipelines/
+│       ├── ingestion/
+│       ├── feature_engineering/
+│       ├── llm_agents/
+│       ├── backtesting/
+│       └── execution/
+├── tests/
+├── notebooks/
+├── docs/
+├── pyproject.toml
+└── requirements.txt
+```
+
+---
+
+## 🚀 Instalación desde Cero
+
+### Prerrequisitos
+- [UV (Astral)](https://astral.sh/uv) instalado
+- Python 3.12+
+- Git
+
+### Pasos
+
+```bash
+# 1. Clonar el repositorio
+git clone https://github.com/apotheosisss/Agente-Trading.git
+cd Agente-Trading
+
+# 2. Crear entorno virtual
+uv venv --python 3.12
+
+# 3. Activar entorno
+source .venv/bin/activate        # macOS/Linux
+.venv\Scripts\Activate.ps1       # Windows
+
+# 4. Instalar dependencias
+uv pip install -r requirements.txt
+
+# 5. Configurar credenciales
+cp conf/local/credentials.yml.example conf/local/credentials.yml
+# Editar credentials.yml con tus API keys
+```
+
+---
+
+## ⚙️ Configuración
+
+Editar `conf/base/parameters.yml`:
+
+```yaml
+ticker: "BTC-USD"       # Activo a operar
+start_date: "2022-01-01"
+end_date: "2024-12-31"
+```
+
+Editar `conf/local/credentials.yml` (no se sube a Git):
+
+```yaml
+openai:
+  api_key: "sk-..."
+newsapi:
+  api_key: "..."
+```
+
+---
+
+## ▶️ Ejecución
+
+```bash
+# Ejecutar pipeline completo
 kedro run
+
+# Ejecutar pipeline específico
+kedro run --pipeline ingestion
+kedro run --pipeline feature_engineering
+kedro run --pipeline llm_agents
+kedro run --pipeline backtesting
+
+# Visualizar pipelines
+kedro viz run
+# Abrir http://localhost:4141
+
+# Correr tests
+pytest tests/
 ```
 
-## How to test your Kedro project
+---
 
-Have a look at the file `tests/test_run.py` for instructions on how to write your tests. You can run your tests as follows:
+## 🗺️ Roadmap
 
-```
-pytest
-```
+| Milestone | Estado | Descripción |
+|---|---|---|
+| M1 — Ingesta y Features | 🔄 En progreso | Pipeline de datos y análisis técnico |
+| M2 — Agentes LLM | ⏳ Pendiente | Orquestador CrewAI con agentes especializados |
+| M3 — Backtesting | ⏳ Pendiente | Validación histórica con VectorBT |
+| M4 — Ejecución | ⏳ Pendiente | Paper trading y gestión de riesgo |
+| M5 — Dashboard | ⏳ Pendiente | Interfaz Streamlit con monitoreo en tiempo real |
 
-You can configure the coverage threshold in your project's `pyproject.toml` file under the `[tool.coverage.report]` section.
+---
 
+## 📐 Documentación Técnica
 
-## Project dependencies
+Ver carpeta [`docs/`](docs/):
 
-To see and update the dependency requirements for your project use `requirements.txt`. You can install the project requirements with `pip install -r requirements.txt`.
+- [`docs/arquitectura.md`](docs/arquitectura.md) — Diseño del sistema
+- [`docs/diagramas/`](docs/diagramas/) — Diagramas PlantUML
+- [`docs/sdd.md`](docs/sdd.md) — Documento de Diseño de Software
+- [`docs/api.md`](docs/api.md) — Referencia de nodos y parámetros
 
-[Further information about project dependencies](https://docs.kedro.org/en/stable/kedro_project_setup/dependencies.html#project-specific-dependencies)
+---
 
-## How to work with Kedro and notebooks
+## 🔒 Reglas de Seguridad
 
-> Note: Using `kedro jupyter` or `kedro ipython` to run your notebook provides these variables in scope: `context`, 'session', `catalog`, and `pipelines`.
->
-> Jupyter, JupyterLab, and IPython are already included in the project requirements by default, so once you have run `pip install -r requirements.txt` you will not need to take any extra steps before you use them.
+1. **Nunca** subir `conf/local/credentials.yml` a Git
+2. **Nunca** operar con dinero real antes de completar el Milestone 3 (backtesting)
+3. Todo nuevo módulo debe tener tests en `/tests/`
+4. Usar `loguru` en lugar de `print()`
+5. Commits frecuentes con mensajes descriptivos en español
 
-### Jupyter
-To use Jupyter notebooks in your Kedro project, you need to install Jupyter:
+---
 
-```
-pip install jupyter
-```
+## 👤 Autor
 
-After installing Jupyter, you can start a local notebook server:
-
-```
-kedro jupyter notebook
-```
-
-### JupyterLab
-To use JupyterLab, you need to install it:
-
-```
-pip install jupyterlab
-```
-
-You can also start JupyterLab:
-
-```
-kedro jupyter lab
-```
-
-### IPython
-And if you want to run an IPython session:
-
-```
-kedro ipython
-```
-
-### How to ignore notebook output cells in `git`
-To automatically strip out all output cell contents before committing to `git`, you can use tools like [`nbstripout`](https://github.com/kynan/nbstripout). For example, you can add a hook in `.git/config` with `nbstripout --install`. This will run `nbstripout` before anything is committed to `git`.
-
-> *Note:* Your output cells will be retained locally.
-
-## Package your Kedro project
-
-[Further information about building project documentation and packaging your project](https://docs.kedro.org/en/stable/deploy/package_a_project/#package-an-entire-kedro-project)
+**Claudio** — Estudiante de Ingeniería Informática mención Ciencia de Datos, DuocUC  
+Proyecto académico — v0.1.0 (en desarrollo activo)
