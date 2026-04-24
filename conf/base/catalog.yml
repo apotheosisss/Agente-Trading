@@ -35,14 +35,23 @@ trading_signal:
   filepath: data/07_model_output/signal.json
   versioned: true
 
+# ── BACKTESTING INTERMEDIATE ─────────────────────────
+backtest_portfolio:
+  type: pandas.ParquetDataset
+  filepath: data/05_model_input/backtest_portfolio.parquet
+
 # ── REPORTING ────────────────────────────────────────
 backtest_metrics:
   type: pandas.CSVDataset
   filepath: data/08_reporting/metrics.csv
+  save_args:
+    encoding: utf-8
+  load_args:
+    encoding: utf-8
 
 equity_curve:
   type: plotly.PlotlyDataset
-  filepath: data/08_reporting/equity_curve.html
+  filepath: data/08_reporting/equity_curve.json
   plotly_args:
     type: scatter
     fig:
@@ -50,3 +59,21 @@ equity_curve:
       y: equity
     layout:
       title: Curva de Equity
+
+# ── EXECUTION ────────────────────────────────────────
+execution_record:
+  type: pandas.CSVDataset
+  filepath: data/07_model_output/execution_record.csv
+  versioned: true
+  save_args:
+    encoding: utf-8
+  load_args:
+    encoding: utf-8
+
+portfolio_state:
+  type: pandas.CSVDataset
+  filepath: data/07_model_output/portfolio_state.csv
+  save_args:
+    encoding: utf-8
+  load_args:
+    encoding: utf-8

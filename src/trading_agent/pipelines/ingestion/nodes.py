@@ -1,10 +1,9 @@
 # src/trading_agent/pipelines/ingestion/nodes.py
 
+import logging
+
 import pandas as pd
 import yfinance as yf
-import requests
-import logging
-from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
