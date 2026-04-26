@@ -34,7 +34,7 @@ def create_pipeline(**kwargs) -> Pipeline:
                     "risk_report",
                     "feature_vector",
                     "params:llm",
-                    "params:ticker",
+                    "params:universe",
                 ],
                 outputs="trading_signal",
                 name="nodo_agente_decision",

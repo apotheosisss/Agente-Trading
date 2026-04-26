@@ -30,10 +30,9 @@ def _atr(high: pd.Series, low: pd.Series, close: pd.Series, period: int = 14) ->
     return tr.ewm(com=period - 1, min_periods=period).mean()
 
 
-def calcular_indicadores_tecnicos(ohlcv: pd.DataFrame, parameters: dict) -> pd.DataFrame:
-    """Calcula RSI, MACD, Bandas de Bollinger, ATR y EMAs sobre datos OHLCV limpios."""
-    df = ohlcv.copy()
-    p = parameters
+def _indicadores_single(grupo: pd.DataFrame, p: dict) -> pd.DataFrame:
+    """Calcula todos los indicadores para un único ticker."""
+    df = grupo.copy()
 
     rsi_period = int(p["rsi_period"])
     macd_fast = int(p["macd_fast"])
@@ -41,70 +40,102 @@ def calcular_indicadores_tecnicos(ohlcv: pd.DataFrame, parameters: dict) -> pd.D
     macd_signal_p = int(p["macd_signal"])
     bb_period = int(p["bb_period"])
     bb_std = float(p["bb_std"])
+    ema_200_period = int(p.get("ema_200", 200))
 
-    # RSI
     df["rsi"] = _rsi(df["close"], rsi_period)
 
-    # MACD
     ema_fast = _ema(df["close"], macd_fast)
     ema_slow = _ema(df["close"], macd_slow)
     df["macd"] = ema_fast - ema_slow
     df["macd_signal"] = _ema(df["macd"], macd_signal_p)
     df["macd_hist"] = df["macd"] - df["macd_signal"]
 
-    # Bandas de Bollinger
     sma = df["close"].rolling(window=bb_period).mean()
     std = df["close"].rolling(window=bb_period).std()
     df["bb_mid"] = sma
     df["bb_upper"] = sma + bb_std * std
     df["bb_lower"] = sma - bb_std * std
 
-    # ATR
     df["atr"] = _atr(df["high"], df["low"], df["close"])
-
-    # EMAs
     df["ema_20"] = _ema(df["close"], 20)
     df["ema_50"] = _ema(df["close"], 50)
+    df["ema_200"] = _ema(df["close"], ema_200_period)
 
-    df = df.dropna()
-    logger.info(f"Indicadores tecnicos calculados: {len(df)} filas, {len(df.columns)} columnas")
-    return df
+    return df.dropna()
+
+
+def calcular_indicadores_tecnicos(ohlcv: pd.DataFrame, parameters: dict) -> pd.DataFrame:
+    """Calcula RSI, MACD, Bandas de Bollinger, ATR y EMAs por ticker.
+
+    Nota: usa loop explícito en lugar de groupby.apply para garantizar
+    compatibilidad con pandas 3.0+ (donde include_groups=False es el default
+    y la columna groupby es excluida de los grupos).
+    """
+    frames = []
+    for ticker, grupo in ohlcv.sort_index().groupby("ticker"):
+        grupo = grupo.copy()
+        grupo["ticker"] = ticker  # garantizar columna ticker en el grupo
+        frames.append(_indicadores_single(grupo, parameters))
+
+    if not frames:
+        raise ValueError("No se obtuvieron indicadores para ningún ticker")
+
+    result = pd.concat(frames).sort_index()
+    n_tickers = result["ticker"].nunique()
+    logger.info(
+        f"Indicadores calculados: {len(result)} filas, {n_tickers} tickers, "
+        f"{len(result.columns)} columnas"
+    )
+    return result
 
 
 def calcular_sentimiento(ohlcv: pd.DataFrame) -> pd.DataFrame:
-    """Proxy de sentimiento basado en momentum de precio (tanh del retorno diario).
+    """Proxy de sentimiento: tanh(retorno_diario × 10) por ticker."""
+    frames = []
+    for ticker, grupo in ohlcv.sort_index().groupby("ticker"):
+        daily_return = grupo["close"].pct_change()
+        score = daily_return.apply(
+            lambda r: float(np.tanh(r * 10)) if pd.notna(r) else 0.0
+        )
+        frame = pd.DataFrame(
+            {"ticker": ticker, "sentiment_score": score},
+            index=grupo.index,
+        ).dropna()
+        frames.append(frame)
 
-    Sustituye FinBERT hasta integrar el pipeline de ingesta de noticias (NewsAPI).
-    Rango de salida: [-1.0, +1.0], donde positivo = momentum alcista.
-    """
-    daily_return = ohlcv["close"].pct_change()
-    sentiment_score = daily_return.apply(
-        lambda r: float(np.tanh(r * 10)) if pd.notna(r) else 0.0
-    )
+    if not frames:
+        raise ValueError("No se obtuvo sentimiento para ningún ticker")
 
-    result = pd.DataFrame({"sentiment_score": sentiment_score}, index=ohlcv.index)
-    result = result.dropna()
-
+    result = pd.concat(frames).sort_index()
     logger.info(
-        f"Sentimiento calculado: {len(result)} filas, score medio={result['sentiment_score'].mean():.3f}"
+        f"Sentimiento calculado: {len(result)} filas, "
+        f"score medio={result['sentiment_score'].mean():.3f}"
     )
     return result
 
 
 def ensamblar_vector_features(technical: pd.DataFrame, sentiment: pd.DataFrame) -> pd.DataFrame:
-    """Combina features tecnicas y de sentimiento en un unico DataFrame alineado por fecha."""
-    vector = technical.join(sentiment[["sentiment_score"]], how="left")
+    """Combina features técnicas y sentimiento alineando por (date, ticker)."""
+    tech = technical.set_index("ticker", append=True)
+    sent = sentiment.set_index("ticker", append=True)[["sentiment_score"]]
+
+    vector = tech.join(sent, how="left")
     vector["sentiment_score"] = vector["sentiment_score"].fillna(0.0)
+    vector = vector.reset_index(level="ticker")
 
     columnas_salida = [
+        "ticker",
         "open", "high", "low", "close", "volume",
         "rsi", "macd", "macd_signal", "macd_hist",
         "bb_upper", "bb_mid", "bb_lower",
-        "ema_20", "ema_50", "atr",
+        "ema_20", "ema_50", "ema_200", "atr",
         "sentiment_score",
     ]
     columnas_salida = [c for c in columnas_salida if c in vector.columns]
-    vector = vector[columnas_salida]
+    vector = vector[columnas_salida].sort_index()
 
-    logger.info(f"Feature vector ensamblado: {len(vector)} filas, {len(vector.columns)} columnas")
+    logger.info(
+        f"Feature vector ensamblado: {len(vector)} filas, "
+        f"{vector['ticker'].nunique()} tickers, {len(vector.columns)} columnas"
+    )
     return vector

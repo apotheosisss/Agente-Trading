@@ -14,8 +14,10 @@ def ohlcv_limpio():
     dates = pd.date_range("2023-01-01", periods=30, freq="D")
     np.random.seed(0)
     close = 20_000 + np.cumsum(np.random.randn(30) * 300)
+    close = np.abs(close).clip(min=1.0)
     df = pd.DataFrame(
         {
+            "ticker": "AAPL",
             "open": close * 0.999,
             "high": close * 1.01,
             "low": close * 0.99,
@@ -30,7 +32,8 @@ def ohlcv_limpio():
 
 def test_validar_datos_ok(ohlcv_limpio):
     result = validar_datos_mercado(ohlcv_limpio)
-    assert list(result.columns) == ["open", "high", "low", "close", "volume"]
+    for col in ["ticker", "open", "high", "low", "close", "volume"]:
+        assert col in result.columns
     assert len(result) == len(ohlcv_limpio)
 
 
@@ -61,8 +64,26 @@ def test_validar_datos_reordena_indice(ohlcv_limpio):
     assert result.index.is_monotonic_increasing
 
 
+def test_validar_multi_ticker():
+    """Valida que el groupby por ticker funcione con múltiples tickers."""
+    dates = pd.date_range("2023-01-01", periods=10, freq="D")
+    frames = []
+    for ticker in ["AAPL", "SPY"]:
+        close = np.linspace(100, 110, 10)
+        frames.append(pd.DataFrame({
+            "ticker": ticker,
+            "open": close, "high": close * 1.01,
+            "low": close * 0.99, "close": close, "volume": 5000.0,
+        }, index=dates))
+    df = pd.concat(frames)
+    df.index.name = "date"
+    result = validar_datos_mercado(df)
+    assert result["ticker"].nunique() == 2
+    assert len(result) == 20
+
+
 def test_obtener_datos_vacio():
     df_vacio = pd.DataFrame()
     with patch("yfinance.download", return_value=df_vacio):
         with pytest.raises(ValueError):
-            obtener_datos_mercado("BTC-USD", "2023-01-01", "2023-01-31")
+            obtener_datos_mercado(["BTC-USD", "SPY"], "2023-01-01", "2023-01-31")

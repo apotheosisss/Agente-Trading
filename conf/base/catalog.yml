@@ -60,6 +60,18 @@ equity_curve:
     layout:
       title: Curva de Equity
 
+# ── BENCHMARK ────────────────────────────────────────
+benchmark_curve:
+  type: plotly.PlotlyDataset
+  filepath: data/08_reporting/benchmark_curve.json
+  plotly_args:
+    type: scatter
+    fig:
+      x: date
+      y: equity
+    layout:
+      title: Benchmark SPY Buy & Hold
+
 # ── EXECUTION ────────────────────────────────────────
 execution_record:
   type: pandas.CSVDataset

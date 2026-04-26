@@ -8,10 +8,11 @@ from trading_agent.pipelines.feature_engineering.nodes import (
 )
 
 COLUMNAS_TECNICAS = [
+    "ticker",
     "open", "high", "low", "close", "volume",
     "rsi", "macd", "macd_signal", "macd_hist",
     "bb_upper", "bb_mid", "bb_lower",
-    "ema_20", "ema_50", "atr",
+    "ema_20", "ema_50", "ema_200", "atr",
 ]
 
 
@@ -36,9 +37,16 @@ def test_indicadores_reduce_filas(sample_ohlcv, sample_parameters):
     assert len(result) < len(sample_ohlcv)
 
 
-def test_sentimiento_columna(sample_ohlcv):
+def test_indicadores_multi_ticker(sample_ohlcv, sample_parameters):
+    """Todos los tickers del input deben aparecer en el output."""
+    result = calcular_indicadores_tecnicos(sample_ohlcv, sample_parameters["technical"])
+    assert result["ticker"].nunique() == sample_ohlcv["ticker"].nunique()
+
+
+def test_sentimiento_columnas(sample_ohlcv):
     result = calcular_sentimiento(sample_ohlcv)
     assert "sentiment_score" in result.columns
+    assert "ticker" in result.columns
 
 
 def test_sentimiento_rango(sample_ohlcv):
@@ -53,8 +61,9 @@ def test_sentimiento_longitud(sample_ohlcv):
 
 def test_vector_columnas(sample_feature_vector):
     esperadas = [
+        "ticker",
         "open", "high", "low", "close", "volume",
-        "rsi", "macd", "bb_upper", "ema_20", "ema_50", "atr",
+        "rsi", "macd", "bb_upper", "ema_20", "ema_50", "ema_200", "atr",
         "sentiment_score",
     ]
     for col in esperadas:
@@ -70,3 +79,11 @@ def test_vector_alinea_fechas(sample_ohlcv, sample_parameters):
     sent = calcular_sentimiento(sample_ohlcv)
     vector = ensamblar_vector_features(tech, sent)
     assert vector.index.equals(tech.index)
+
+
+def test_vector_multi_ticker(sample_feature_vector, sample_ohlcv):
+    """El feature vector conserva todos los tickers."""
+    assert (
+        sample_feature_vector["ticker"].nunique()
+        == sample_ohlcv["ticker"].nunique()
+    )

@@ -1,7 +1,16 @@
-# ── ACTIVOS ───────────────────────────────────────────
-ticker: "BTC-USD"
+# ── UNIVERSO DE ACTIVOS ───────────────────────────────
+universe:
+  - "SPY"     # S&P 500 — referencia de mercado
+  - "QQQ"     # Nasdaq 100 — tecnología
+  - "GLD"     # Oro — cobertura de riesgo
+  - "TLT"     # Bonos 20y — correlación inversa a equity
+  - "AAPL"    # Apple — large cap quality
+  - "MSFT"    # Microsoft — large cap quality
+  - "BTC-USD" # Bitcoin — alta volatilidad / alto potencial
+
+ticker: "SPY"          # ticker principal para reportes LLM
 timeframe: "1d"
-start_date: "2022-01-01"
+start_date: "2019-01-01"   # 6 años: COVID 2020 + bear 2022 + recovery
 end_date: "2024-12-31"
 
 # ── INDICADORES TÉCNICOS ──────────────────────────────
@@ -12,12 +21,15 @@ technical:
   macd_signal: 9
   bb_period: 20
   bb_std: 2
+  ema_200: 200           # filtro de tendencia principal
 
 # ── RIESGO ───────────────────────────────────────────
 risk:
-  max_position_pct: 0.10   # máx 10% del portafolio por trade
-  stop_loss_pct: 0.03      # stop-loss en 3%
-  take_profit_pct: 0.06    # take-profit en 6%
+  max_positions: 3              # posiciones simultáneas máximas
+  stop_loss_atr_mult: 2.0       # stop = entrada - (ATR × mult)
+  max_position_pct: 0.10        # compatibilidad ejecución
+  stop_loss_pct: 0.03
+  take_profit_pct: 0.06
 
 # ── AGENTES LLM ──────────────────────────────────────
 llm:
@@ -29,3 +41,4 @@ llm:
 backtesting:
   initial_capital: 10000
   commission: 0.001
+  rebalance_day: 0       # 0 = lunes (isoweekday - 1)

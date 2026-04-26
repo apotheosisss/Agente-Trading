@@ -1,4 +1,4 @@
-"""Dashboard de monitoreo — Trading Agent (M5)."""
+"""Dashboard de monitoreo — Trading Agent (M6 — Multi-Asset)."""
 
 import json
 from pathlib import Path
@@ -17,7 +17,7 @@ DATA = ROOT / "data"
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _latest_versioned(base_dir: Path, filename: str) -> Path:
-    """Devuelve la ruta al archivo dentro del subdirectorio de versión más reciente."""
+    """Ruta al archivo dentro del subdirectorio de versión más reciente."""
     try:
         subdirs = [p for p in base_dir.iterdir() if p.is_dir()]
     except OSError:
@@ -33,11 +33,19 @@ def _latest_versioned(base_dir: Path, filename: str) -> Path:
 # ─────────────────────────────────────────────────────────────────────────────
 
 @st.cache_data(ttl=60)
-def load_signal() -> dict | None:
+def load_signal() -> pd.DataFrame | None:
+    """Ranking multi-ticker (trading_signal) como DataFrame."""
     try:
         path = _latest_versioned(DATA / "07_model_output" / "signal.json", "signal.json")
-        return json.loads(path.read_text(encoding="utf-8"))
-    except (FileNotFoundError, json.JSONDecodeError):
+        raw = json.loads(path.read_text(encoding="utf-8"))
+        df = pd.DataFrame(raw)
+        # Handle both orient='columns' and orient='records' formats
+        if isinstance(raw, dict):
+            df = pd.DataFrame.from_dict(raw)
+        elif isinstance(raw, list):
+            df = pd.DataFrame(raw)
+        return df.sort_values("score", ascending=False).reset_index(drop=True)
+    except (FileNotFoundError, json.JSONDecodeError, Exception):
         return None
 
 
@@ -81,10 +89,21 @@ def load_equity_curve() -> dict | None:
 
 
 @st.cache_data(ttl=60)
+def load_benchmark_curve() -> dict | None:
+    path = DATA / "08_reporting" / "benchmark_curve.json"
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (FileNotFoundError, json.JSONDecodeError):
+        return None
+
+
+@st.cache_data(ttl=60)
 def load_features() -> pd.DataFrame | None:
     path = DATA / "04_feature" / "feature_vector.parquet"
     try:
-        return pd.read_parquet(path)
+        df = pd.read_parquet(path)
+        df.index = pd.to_datetime(df.index)
+        return df
     except FileNotFoundError:
         return None
 
@@ -93,65 +112,77 @@ def load_features() -> pd.DataFrame | None:
 # 3 — CHART BUILDERS
 # ─────────────────────────────────────────────────────────────────────────────
 
-def build_equity_chart(equity_json: dict) -> go.Figure:
+def build_equity_chart(equity_json: dict, benchmark_json: dict | None = None) -> go.Figure:
+    """Curva de equity de la estrategia + benchmark SPY buy-and-hold."""
+    fig = go.Figure()
+
     trace = equity_json.get("data", [{}])[0]
     x = trace.get("x", [])
     y = trace.get("y", [])
 
-    fig = go.Figure()
-
-    if len(x) and len(y):
+    if x and y:
         fig.add_trace(
             go.Scatter(
-                x=x,
-                y=y,
-                mode="lines",
-                line=dict(color="#00b4d8", width=1.5),
-                name="Equity",
-                hovertemplate="<b>%{x|%Y-%m-%d}</b><br>$%{y:,.0f}<extra></extra>",
+                x=x, y=y, mode="lines",
+                line=dict(color="#00b4d8", width=1.8),
+                name="Estrategia",
+                hovertemplate="<b>%{x|%Y-%m-%d}</b><br>$%{y:,.0f}<extra>Estrategia</extra>",
             )
         )
-        fig.add_hline(
-            y=10_000,
-            line_dash="dot",
-            line_color="rgba(255,255,255,0.35)",
-            annotation_text="Capital inicial",
-            annotation_position="bottom right",
-        )
-    else:
-        fig.add_annotation(
-            text="Sin datos de equity", xref="paper", yref="paper",
-            x=0.5, y=0.5, showarrow=False, font=dict(size=14),
-        )
+
+    if benchmark_json:
+        bt = benchmark_json.get("data", [{}])[0]
+        bx = bt.get("x", [])
+        by = bt.get("y", [])
+        if bx and by:
+            fig.add_trace(
+                go.Scatter(
+                    x=bx, y=by, mode="lines",
+                    line=dict(color="#ffa726", width=1.2, dash="dot"),
+                    name="SPY B&H",
+                    hovertemplate="<b>%{x|%Y-%m-%d}</b><br>$%{y:,.0f}<extra>SPY B&H</extra>",
+                )
+            )
+
+    fig.add_hline(
+        y=10_000,
+        line_dash="dot",
+        line_color="rgba(255,255,255,0.30)",
+        annotation_text="Capital inicial",
+        annotation_position="bottom right",
+    )
 
     fig.update_layout(
         template="plotly_dark",
-        title=None,
         xaxis_title="Fecha",
         yaxis_title="USD",
         hovermode="x unified",
         xaxis=dict(type="date", rangeslider=dict(visible=True)),
         yaxis=dict(tickprefix="$", tickformat=",.0f"),
         margin=dict(l=60, r=20, t=20, b=60),
-        height=420,
+        height=440,
         legend=dict(orientation="h", y=1.04, x=1, xanchor="right"),
     )
     return fig
 
 
-def build_technical_chart(df: pd.DataFrame, window: str) -> go.Figure:
+def build_technical_chart(df: pd.DataFrame, ticker: str, window: str) -> go.Figure:
+    """Gráfico técnico de 4 paneles para un ticker específico."""
     _window_map = {"90d": "90D", "180d": "180D", "1a": "365D", "Todo": None}
     w = _window_map.get(window)
-    subset = df.last(w) if w else df
+
+    subset = df[df["ticker"] == ticker].copy()
+    if w:
+        cutoff = subset.index.max() - pd.Timedelta(w)
+        subset = subset[subset.index >= cutoff]
 
     fig = make_subplots(
-        rows=4,
-        cols=1,
+        rows=4, cols=1,
         shared_xaxes=True,
         row_heights=[0.50, 0.18, 0.18, 0.14],
         vertical_spacing=0.03,
         subplot_titles=(
-            "Precio & Bandas de Bollinger",
+            f"Precio & Bollinger — {ticker}",
             "RSI (14)",
             "MACD (12/26/9)",
             "Sentimiento",
@@ -160,22 +191,20 @@ def build_technical_chart(df: pd.DataFrame, window: str) -> go.Figure:
 
     if len(subset) == 0:
         fig.add_annotation(
-            text="Sin datos para el período seleccionado",
+            text=f"Sin datos para {ticker}",
             xref="paper", yref="paper", x=0.5, y=0.5, showarrow=False,
         )
         return fig
 
     x = subset.index
 
-    # ── Fila 1: Precio + Bollinger + EMAs ───────────────────────────────────
-    # Orden crítico: upper → lower (fill) → mid → close → ema20 → ema50
+    # ── Fila 1: Precio + Bollinger + EMAs ────────────────────────────────────
     fig.add_trace(
         go.Scatter(
             x=x, y=subset["bb_upper"], mode="lines",
             line=dict(color="rgba(100,180,255,0.30)", width=1),
             name="BB Superior", showlegend=True,
-        ),
-        row=1, col=1,
+        ), row=1, col=1,
     )
     fig.add_trace(
         go.Scatter(
@@ -183,98 +212,83 @@ def build_technical_chart(df: pd.DataFrame, window: str) -> go.Figure:
             line=dict(color="rgba(100,180,255,0.30)", width=1),
             name="BB Inferior", fill="tonexty",
             fillcolor="rgba(100,180,255,0.07)", showlegend=False,
-        ),
-        row=1, col=1,
+        ), row=1, col=1,
     )
     fig.add_trace(
         go.Scatter(
             x=x, y=subset["bb_mid"], mode="lines",
             line=dict(color="rgba(100,180,255,0.50)", width=1, dash="dot"),
             name="BB Media",
-        ),
-        row=1, col=1,
+        ), row=1, col=1,
     )
     fig.add_trace(
         go.Scatter(
             x=x, y=subset["close"], mode="lines",
-            line=dict(color="#ffffff", width=1.5),
+            line=dict(color="#ffffff", width=1.8),
             name="Precio",
-            hovertemplate="<b>%{x|%Y-%m-%d}</b><br>$%{y:,.0f}<extra></extra>",
-        ),
-        row=1, col=1,
+            hovertemplate="<b>%{x|%Y-%m-%d}</b><br>$%{y:,.2f}<extra></extra>",
+        ), row=1, col=1,
     )
     fig.add_trace(
         go.Scatter(
             x=x, y=subset["ema_20"], mode="lines",
-            line=dict(color="#f4a261", width=1.2),
-            name="EMA 20",
-        ),
-        row=1, col=1,
+            line=dict(color="#f4a261", width=1.2), name="EMA 20",
+        ), row=1, col=1,
     )
     fig.add_trace(
         go.Scatter(
             x=x, y=subset["ema_50"], mode="lines",
-            line=dict(color="#e76f51", width=1.2),
-            name="EMA 50",
-        ),
-        row=1, col=1,
+            line=dict(color="#e76f51", width=1.2), name="EMA 50",
+        ), row=1, col=1,
     )
+    if "ema_200" in subset.columns:
+        fig.add_trace(
+            go.Scatter(
+                x=x, y=subset["ema_200"], mode="lines",
+                line=dict(color="#9c27b0", width=1.5, dash="dash"),
+                name="EMA 200",
+            ), row=1, col=1,
+        )
 
     # ── Fila 2: RSI ──────────────────────────────────────────────────────────
     fig.add_trace(
         go.Scatter(
             x=x, y=subset["rsi"], mode="lines",
-            line=dict(color="#80cbc4", width=1.5),
-            name="RSI",
+            line=dict(color="#80cbc4", width=1.5), name="RSI",
             hovertemplate="%{y:.1f}<extra>RSI</extra>",
-        ),
-        row=2, col=1,
+        ), row=2, col=1,
     )
-    fig.add_hline(
-        y=70, row=2, col=1,
-        line_dash="dot", line_color="rgba(255,100,100,0.50)",
-        annotation_text="Sobrecompra", annotation_position="top right",
-        annotation_font_size=10,
-    )
-    fig.add_hline(
-        y=30, row=2, col=1,
-        line_dash="dot", line_color="rgba(100,255,130,0.50)",
-        annotation_text="Sobreventa", annotation_position="bottom right",
-        annotation_font_size=10,
-    )
+    for level, label, color in [(70, "Sobrecompra", "rgba(255,100,100,0.50)"),
+                                  (30, "Sobreventa",  "rgba(100,255,130,0.50)")]:
+        fig.add_hline(
+            y=level, row=2, col=1,
+            line_dash="dot", line_color=color,
+            annotation_text=label,
+            annotation_position="top right" if level == 70 else "bottom right",
+            annotation_font_size=10,
+        )
     fig.update_yaxes(range=[0, 100], row=2, col=1)
 
     # ── Fila 3: MACD ─────────────────────────────────────────────────────────
-    bar_colors = [
-        "#26a69a" if v >= 0 else "#ef5350"
-        for v in subset["macd_hist"]
-    ]
+    bar_colors = ["#26a69a" if v >= 0 else "#ef5350" for v in subset["macd_hist"]]
     fig.add_trace(
         go.Bar(
             x=x, y=subset["macd_hist"],
-            marker_color=bar_colors,
-            name="Histograma MACD",
-            hovertemplate="%{y:.2f}<extra>Hist</extra>",
-        ),
-        row=3, col=1,
+            marker_color=bar_colors, name="Histograma MACD",
+            hovertemplate="%{y:.4f}<extra>Hist</extra>",
+        ), row=3, col=1,
     )
     fig.add_trace(
         go.Scatter(
             x=x, y=subset["macd"], mode="lines",
-            line=dict(color="#2196f3", width=1.2),
-            name="MACD",
-            hovertemplate="%{y:.2f}<extra>MACD</extra>",
-        ),
-        row=3, col=1,
+            line=dict(color="#2196f3", width=1.2), name="MACD",
+        ), row=3, col=1,
     )
     fig.add_trace(
         go.Scatter(
             x=x, y=subset["macd_signal"], mode="lines",
-            line=dict(color="#ff9800", width=1.2),
-            name="Señal MACD",
-            hovertemplate="%{y:.2f}<extra>Señal</extra>",
-        ),
-        row=3, col=1,
+            line=dict(color="#ff9800", width=1.2), name="Senal MACD",
+        ), row=3, col=1,
     )
 
     # ── Fila 4: Sentimiento ───────────────────────────────────────────────────
@@ -284,19 +298,14 @@ def build_technical_chart(df: pd.DataFrame, window: str) -> go.Figure:
             line=dict(color="#ce93d8", width=1.2),
             fill="tozeroy", fillcolor="rgba(206,147,216,0.10)",
             name="Sentimiento",
-            hovertemplate="%{y:.3f}<extra>Sentimiento</extra>",
-        ),
-        row=4, col=1,
+        ), row=4, col=1,
     )
-    fig.add_hline(
-        y=0, row=4, col=1,
-        line_dash="solid", line_color="rgba(255,255,255,0.20)",
-    )
+    fig.add_hline(y=0, row=4, col=1, line_dash="solid",
+                  line_color="rgba(255,255,255,0.20)")
 
-    # ── Layout global ─────────────────────────────────────────────────────────
     fig.update_layout(
         template="plotly_dark",
-        height=800,
+        height=820,
         hovermode="x unified",
         barmode="relative",
         margin=dict(l=60, r=20, t=60, b=40),
@@ -308,16 +317,15 @@ def build_technical_chart(df: pd.DataFrame, window: str) -> go.Figure:
     fig.update_xaxes(
         rangeselector=dict(
             buttons=[
-                dict(count=90, label="90d", step="day", stepmode="backward"),
-                dict(count=180, label="180d", step="day", stepmode="backward"),
-                dict(count=1, label="1a", step="year", stepmode="backward"),
+                dict(count=90,  label="90d",  step="day",  stepmode="backward"),
+                dict(count=180, label="180d", step="day",  stepmode="backward"),
+                dict(count=1,   label="1a",   step="year", stepmode="backward"),
                 dict(step="all", label="Todo"),
             ]
         ),
         row=1, col=1,
     )
-    fig.update_yaxes(tickprefix="$", tickformat=",.0f", row=1, col=1)
-
+    fig.update_yaxes(tickformat=",.2f", row=1, col=1)
     return fig
 
 
@@ -325,130 +333,176 @@ def build_technical_chart(df: pd.DataFrame, window: str) -> go.Figure:
 # 4 — TAB RENDERERS
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _signal_badge(signal_val: str) -> str:
-    colors = {
-        "BUY":  ("🟢", "#1b5e20", "#a5d6a7"),
-        "SELL": ("🔴", "#b71c1c", "#ef9a9a"),
-        "HOLD": ("⚪", "#37474f", "#b0bec5"),
-    }
-    emoji, bg, fg = colors.get(signal_val, colors["HOLD"])
+_SIGNAL_COLORS = {
+    "BUY":  ("#1b5e20", "#a5d6a7", "🟢"),
+    "SELL": ("#b71c1c", "#ef9a9a", "🔴"),
+    "HOLD": ("#37474f", "#b0bec5", "⚪"),
+}
+
+
+def _badge_html(signal_val: str, small: bool = False) -> str:
+    bg, fg, emoji = _SIGNAL_COLORS.get(signal_val, _SIGNAL_COLORS["HOLD"])
+    size = "1.0rem" if small else "2.6rem"
     return (
         f'<div style="display:inline-block;background:{bg};color:{fg};'
-        f'font-size:2.6rem;font-weight:900;padding:0.35em 0.8em;'
-        f'border-radius:12px;letter-spacing:0.08em;">'
-        f'{emoji} {signal_val}</div>'
+        f'font-size:{size};font-weight:900;padding:0.2em 0.6em;'
+        f'border-radius:8px;">{emoji} {signal_val}</div>'
     )
 
 
-def render_tab_signal(signal: dict | None) -> None:
-    if signal is None:
-        st.warning("No hay datos de señal disponibles. Ejecuta el pipeline primero.")
+def render_tab_signal(signal_df: pd.DataFrame | None) -> None:
+    """Ranking multi-ticker con señal BUY/HOLD/SELL, score y confianza."""
+    if signal_df is None or len(signal_df) == 0:
+        st.warning("No hay datos de señal. Ejecuta `kedro run` primero.")
         return
 
-    val = signal["signal"]["0"]
-    conf = float(signal["confidence"]["0"])
-    score = float(signal["score"]["0"])
-    reasoning = str(signal["reasoning"]["0"])
-    ticker = str(signal["ticker"]["0"])
-    ts = str(signal["timestamp"]["0"])[:19].replace("T", " ")
+    ts = str(signal_df.get("timestamp", pd.Series(["—"])).iloc[0])[:19].replace("T", " ")
+    st.caption(f"Señales generadas: {ts} UTC")
 
-    st.markdown(_signal_badge(val), unsafe_allow_html=True)
-    st.write("")
+    buys = signal_df[signal_df["signal"] == "BUY"]
+    if len(buys) > 0:
+        st.success(f"**{len(buys)} señal(es) BUY** detectadas en el último período")
+    else:
+        st.info("No hay señales BUY activas (mercado en consolidación o por debajo de EMA200)")
 
-    col1, col2, col3 = st.columns(3)
-    col1.metric("Confianza", f"{conf:.0%}")
-    col2.metric("Score", f"{score:+.1f}")
-    col3.metric("Ticker", ticker)
-
-    st.progress(conf, text=f"Confianza: {conf:.0%}")
-    st.caption(f"Señal generada: {ts} UTC")
     st.divider()
 
-    with st.expander("Ver razonamiento completo"):
-        st.text(reasoning)
+    # Tabla de ranking
+    for _, row in signal_df.iterrows():
+        ticker = str(row.get("ticker", "—"))
+        signal_val = str(row.get("signal", "HOLD"))
+        score = float(row.get("score", 0.0))
+        conf = float(row.get("confidence", 0.0))
+        reasoning = str(row.get("reasoning", "—"))
+
+        col_badge, col_ticker, col_score, col_conf, col_reason = st.columns(
+            [1.2, 1.0, 1.0, 1.0, 4.0]
+        )
+        col_badge.markdown(_badge_html(signal_val, small=True), unsafe_allow_html=True)
+        col_ticker.metric(label="Ticker", value=ticker)
+        col_score.metric(label="Score", value=f"{score:+.1f}" if score != -999.0 else "excluido")
+        col_conf.metric(label="Confianza", value=f"{conf:.0%}" if conf > 0 else "—")
+        with col_reason:
+            with st.expander("Razonamiento"):
+                st.caption(reasoning[:300] + ("..." if len(reasoning) > 300 else ""))
+
+    st.divider()
+    st.caption("Score = -999 → activo excluido por filtro de tendencia (close < EMA 200)")
 
 
 def render_tab_portfolio(portfolio: pd.DataFrame | None, execution: pd.DataFrame | None) -> None:
+    """Estado multi-posición del portfolio paper trading."""
     if portfolio is None:
         st.warning("No hay datos de portafolio disponibles.")
         return
 
-    row = portfolio.iloc[0]
     st.info("Modo: Paper Trading — sin dinero real comprometido")
 
-    col1, col2, col3 = st.columns(3)
-    col1.metric("Efectivo disponible", f"${float(row['cash']):,.2f}")
-    col2.metric("Valor posición", f"${float(row['position_value']):,.2f}")
-    col3.metric("Valor total", f"${float(row['total_value']):,.2f}")
+    filled = portfolio[portfolio.get("last_order_status", pd.Series()) == "FILLED"] if "last_order_status" in portfolio.columns else pd.DataFrame()
+    has_positions = len(filled) > 0
 
-    st.divider()
-    c1, c2 = st.columns(2)
-    c1.metric("Stop-Loss", f"{float(row['stop_loss_pct']):.1%}")
-    c2.metric("Take-Profit", f"{float(row['take_profit_pct']):.1%}")
+    if has_positions:
+        first = filled.iloc[0]
+        col1, col2, col3 = st.columns(3)
+        col1.metric("Efectivo", f"${float(first.get('cash', 0)):,.2f}")
+        col2.metric("Posiciones abiertas", len(filled))
+        col3.metric("Valor total", f"${float(first.get('total_value', 0)):,.2f}")
 
-    st.divider()
-    st.subheader("Última orden")
-
-    if execution is not None:
-        exc = execution.iloc[0]
-        status = str(exc["status"])
-        badge_color = "#1b5e20" if status == "FILLED" else "#37474f"
-        badge_fg = "#a5d6a7" if status == "FILLED" else "#b0bec5"
-        st.markdown(
-            f'<span style="background:{badge_color};color:{badge_fg};'
-            f'padding:3px 12px;border-radius:8px;font-weight:700;">{status}</span>',
-            unsafe_allow_html=True,
-        )
-        st.write("")
-        e1, e2 = st.columns(2)
-        e1.metric("Tamaño orden", f"${float(exc['order_size_usd']):,.2f}")
-        e2.metric("Confianza", f"{float(exc['confidence']):.0%}")
-        st.caption(f"Razón: {exc['reason']}")
-        ts = str(exc["timestamp"])[:19].replace("T", " ")
-        st.caption(f"Timestamp: {ts} UTC  |  Modo: {exc['mode']}")
+        st.divider()
+        st.subheader("Posiciones activas")
+        for _, pos in filled.iterrows():
+            ticker = str(pos.get("ticker", "—"))
+            pos_val = float(pos.get("position_value", 0))
+            stop_mult = float(pos.get("stop_loss_atr_mult", 2.0))
+            c1, c2, c3 = st.columns(3)
+            c1.metric(f"Ticker", ticker)
+            c2.metric("Valor posición", f"${pos_val:,.2f}")
+            c3.metric("Stop-Loss mult.", f"{stop_mult}× ATR")
     else:
-        st.caption("Sin registros de ejecución.")
+        row = portfolio.iloc[0]
+        col1, col2, col3 = st.columns(3)
+        col1.metric("Efectivo", f"${float(row.get('cash', 0)):,.2f}")
+        col2.metric("Posiciones abiertas", 0)
+        col3.metric("Valor total", f"${float(row.get('total_value', 0)):,.2f}")
+        st.info("Sin posiciones activas — capital en efectivo.")
+
+    if execution is not None and len(execution) > 0:
+        st.divider()
+        st.subheader("Última sesión de órdenes")
+        filled_orders = execution[execution["status"] == "FILLED"]
+        if len(filled_orders) > 0:
+            st.dataframe(
+                filled_orders[["ticker", "signal", "order_size_usd", "confidence", "mode"]],
+                use_container_width=True,
+            )
+        else:
+            exc = execution.iloc[0]
+            st.caption(f"Sin órdenes ejecutadas — razón: {exc.get('reason', '—')}")
 
 
-def render_tab_backtesting(metrics: pd.Series | None, equity_json: dict | None) -> None:
+def render_tab_backtesting(
+    metrics: pd.Series | None,
+    equity_json: dict | None,
+    benchmark_json: dict | None,
+) -> None:
+    """Métricas de rendimiento + curva de equity vs benchmark."""
     if metrics is None:
         st.warning("No hay métricas de backtesting disponibles.")
         return
 
-    col1, col2, col3, col4 = st.columns(4)
-    col1.metric("Sharpe Ratio", f"{float(metrics['sharpe_ratio']):.4f}")
-    col2.metric("Max Drawdown", f"{float(metrics['max_drawdown_pct']):.2f}%")
-    col3.metric("Win Rate", f"{float(metrics['win_rate_pct']):.1f}%")
-    col4.metric("CAGR", f"{float(metrics['cagr_pct']):.2f}%")
+    col1, col2, col3, col4, col5 = st.columns(5)
+    col1.metric("Sharpe Ratio", f"{float(metrics['sharpe_ratio']):.2f}")
+    col2.metric("Max Drawdown", f"{float(metrics['max_drawdown_pct']):.1f}%")
+    col3.metric("CAGR", f"{float(metrics['cagr_pct']):.1f}%")
+    col4.metric("Win Rate", f"{float(metrics['win_rate_pct']):.1f}%")
+    col5.metric("Trades/año", f"{float(metrics.get('trades_per_year', 0)):.0f}")
 
-    col5, col6, _ = st.columns([1, 1, 2])
-    col5.metric("Equity Final", f"${float(metrics['final_equity_usd']):,.2f}")
-    col6.metric("N° Operaciones", int(metrics["n_trades"]))
+    col6, col7, col8 = st.columns([1, 1, 2])
+    col6.metric("Equity final", f"${float(metrics['final_equity_usd']):,.0f}")
+    col7.metric("Retorno total", f"{float(metrics['total_return_pct']):.1f}%")
+    col8.metric("N° Operaciones", int(metrics["n_trades"]))
 
     st.divider()
-    st.subheader("Curva de Equity")
-
+    st.subheader("Curva de Equity vs SPY Buy & Hold")
     if equity_json:
-        fig = build_equity_chart(equity_json)
+        fig = build_equity_chart(equity_json, benchmark_json)
         st.plotly_chart(fig, use_container_width=True)
     else:
         st.info("Gráfico de equity no disponible.")
 
+    st.caption(
+        "La línea naranja (--) representa el benchmark SPY buy-and-hold "
+        "con el mismo capital inicial."
+    )
 
-def render_tab_tecnico(df: pd.DataFrame | None) -> None:
-    if df is None:
+
+def render_tab_tecnico(features: pd.DataFrame | None) -> None:
+    """Análisis técnico multi-ticker con selector de activo y EMA 200."""
+    if features is None:
         st.warning("No hay datos de features disponibles.")
         return
 
-    window = st.radio(
-        "Período",
-        ["90d", "180d", "1a", "Todo"],
-        index=3,
-        horizontal=True,
-    )
+    tickers = sorted(features["ticker"].unique().tolist())
 
-    fig = build_technical_chart(df, window)
-    st.plotly_chart(fig, use_container_width=True, key=f"tecnico_{window}")
+    col_sel, col_win = st.columns([2, 3])
+    with col_sel:
+        ticker = st.selectbox("Activo", tickers, index=0)
+    with col_win:
+        window = st.radio("Período", ["90d", "180d", "1a", "Todo"], index=2, horizontal=True)
+
+    fig = build_technical_chart(features, ticker, window)
+    st.plotly_chart(fig, use_container_width=True, key=f"tech_{ticker}_{window}")
+
+    # Resumen del último día para el ticker seleccionado
+    last_row = features[features["ticker"] == ticker].iloc[-1]
+    date_str = features[features["ticker"] == ticker].index[-1].strftime("%Y-%m-%d")
+    st.caption(
+        f"**{ticker}** — {date_str} | "
+        f"Close: ${float(last_row['close']):,.2f} | "
+        f"EMA200: ${float(last_row.get('ema_200', 0)):,.2f} | "
+        f"RSI: {float(last_row['rsi']):.1f} | "
+        f"ATR: ${float(last_row['atr']):,.2f}"
+    )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -465,26 +519,28 @@ def main() -> None:
 
     with st.sidebar:
         st.title("📈 Trading Agent")
-        st.caption("Dashboard de monitoreo — M5")
+        st.caption("Dashboard multi-asset — M6")
         st.divider()
         if st.button("🔄 Actualizar datos", use_container_width=True):
             st.cache_data.clear()
             st.rerun()
         st.divider()
-        st.caption("Datos desde `data/`")
-        st.caption("Paper trading únicamente")
+        st.caption("📁 Datos desde `data/`")
+        st.caption("🔒 Paper trading únicamente")
+        st.caption("📅 Universo: SPY · QQQ · GLD · TLT · AAPL · MSFT · BTC-USD")
 
-    st.title("Trading Agent — Dashboard")
+    st.title("Trading Agent — Dashboard Multi-Asset")
 
     signal    = load_signal()
     portfolio = load_portfolio()
     execution = load_execution()
     metrics   = load_metrics()
     equity    = load_equity_curve()
+    benchmark = load_benchmark_curve()
     features  = load_features()
 
     tab1, tab2, tab3, tab4 = st.tabs(
-        ["📊 Señal", "💼 Portafolio", "📈 Backtesting", "🔬 Análisis Técnico"]
+        ["📊 Ranking Señales", "💼 Portafolio", "📈 Backtesting", "🔬 Análisis Técnico"]
     )
 
     with tab1:
@@ -494,7 +550,7 @@ def main() -> None:
         render_tab_portfolio(portfolio, execution)
 
     with tab3:
-        render_tab_backtesting(metrics, equity)
+        render_tab_backtesting(metrics, equity, benchmark)
 
     with tab4:
         render_tab_tecnico(features)

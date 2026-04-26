@@ -8,27 +8,44 @@ from trading_agent.pipelines.feature_engineering.nodes import (
     ensamblar_vector_features,
 )
 
+TICKERS = ["AAPL", "SPY", "BTC-USD"]
+
 
 @pytest.fixture
 def sample_ohlcv():
-    dates = pd.date_range("2023-01-01", periods=60, freq="D")
+    """3 tickers × 60 días = 180 filas con columna 'ticker' e índice DatetimeIndex."""
     np.random.seed(42)
-    close = 20_000 + np.cumsum(np.random.randn(60) * 500)
-    high = close * 1.01
-    low = close * 0.99
-    open_ = close * (1 + np.random.randn(60) * 0.003)
-    volume = np.random.randint(1_000, 10_000, size=60).astype(float)
-    df = pd.DataFrame(
-        {"open": open_, "high": high, "low": low, "close": close, "volume": volume},
-        index=dates,
-    )
-    df.index.name = "date"
-    return df
+    dates = pd.date_range("2023-01-01", periods=60, freq="D")
+    frames = []
+    for i, ticker in enumerate(TICKERS):
+        base = 20_000.0 + i * 5_000.0
+        close = base + np.cumsum(np.random.randn(60) * 300)
+        close = np.abs(close).clip(min=1.0)
+        df = pd.DataFrame(
+            {
+                "ticker": ticker,
+                "open": close * (1 + np.random.randn(60) * 0.002),
+                "high": close * 1.01,
+                "low": close * 0.99,
+                "close": close,
+                "volume": np.random.randint(1_000, 10_000, size=60).astype(float),
+            },
+            index=dates,
+        )
+        df.index.name = "date"
+        frames.append(df)
+    result = pd.concat(frames).sort_index()
+    # Asegurar precios positivos
+    for col in ["open", "high", "low", "close"]:
+        result[col] = result[col].abs().clip(lower=1.0)
+    return result
 
 
 @pytest.fixture
 def sample_parameters():
     return {
+        "universe": TICKERS,
+        "ticker": "SPY",
         "technical": {
             "rsi_period": 14,
             "macd_fast": 12,
@@ -36,13 +53,17 @@ def sample_parameters():
             "macd_signal": 9,
             "bb_period": 20,
             "bb_std": 2.0,
+            "ema_200": 200,
         },
         "backtesting": {
             "initial_capital": 10_000,
             "commission": 0.001,
+            "rebalance_day": 0,
         },
         "risk": {
-            "max_position_pct": 0.10,
+            "max_positions": 3,
+            "max_position_pct": 0.33,
+            "stop_loss_atr_mult": 2.0,
             "stop_loss_pct": 0.03,
             "take_profit_pct": 0.06,
         },

@@ -5,107 +5,229 @@ import logging
 import numpy as np
 import pandas as pd
 
+from trading_agent.pipelines.shared_utils import score_row
+
 logger = logging.getLogger(__name__)
 
 
 def ejecutar_backtest(feature_vector: pd.DataFrame, parameters: dict) -> pd.DataFrame:
-    """Simula estrategia RSI+MACD combinada sobre datos históricos.
+    """Portfolio trend-following: rotación semanal + stop-loss ATR diario.
 
-    Señal de entrada: RSI < 35 Y MACD alcista.
-    Señal de salida:  RSI > 65 Y MACD bajista.
-    Retorna DataFrame con equidad, cash, valor de posición y tipo de operación por fecha.
+    Cada lunes se re-rankean todos los activos por score (solo los que cierran
+    por encima de EMA 200). Se mantienen los top ``max_positions`` en peso igual.
+    Cada día se verifican stop-losses individuales por posición.
+
+    Retorna DataFrame con una fila por fecha: equity, cash, trade_type,
+    tickers_held, n_positions, buys_today, exits_today.
     """
-    p = parameters["backtesting"]
-    initial_capital = float(p["initial_capital"])
-    commission = float(p["commission"])
+    bt = parameters["backtesting"]
+    initial_capital = float(bt["initial_capital"])
+    commission = float(bt["commission"])
+    max_positions = int(parameters["risk"]["max_positions"])
+    stop_loss_atr_mult = float(parameters["risk"]["stop_loss_atr_mult"])
+    rebalance_dow = int(bt.get("rebalance_day", 0))  # 0=lun, isoweekday Mon=1
 
     cash = initial_capital
-    position = 0.0
-    records = []
+    # {ticker: {"shares": float, "entry_price": float, "stop_loss": float}}
+    open_positions: dict = {}
+    daily_records = []
 
-    for date, row in feature_vector.iterrows():
-        price = float(row["close"])
-        rsi = float(row["rsi"])
-        macd = float(row["macd"])
-        macd_sig = float(row["macd_signal"])
+    dates = sorted(feature_vector.index.unique())
 
-        buy_signal = rsi < 35 and macd > macd_sig
-        sell_signal = rsi > 65 and macd < macd_sig
+    for date in dates:
+        today = feature_vector[feature_vector.index == date]
 
-        trade_type = ""
-        if buy_signal and position == 0.0:
-            shares = (cash * (1.0 - commission)) / price
-            position = shares
-            cash = 0.0
+        # Mapas precio/ATR para este día
+        price_map: dict[str, float] = {}
+        atr_map: dict[str, float] = {}
+        for _, row in today.iterrows():
+            t = str(row["ticker"])
+            price_map[t] = float(row["close"])
+            atr_map[t] = float(row["atr"])
+
+        trade_events: list[str] = []
+
+        # ── 1. STOP-LOSS DIARIO ──────────────────────────────────────────────
+        stopped: list[str] = []
+        for ticker, pos in open_positions.items():
+            price = price_map.get(ticker)
+            if price is None:
+                continue
+            if price <= pos["stop_loss"]:
+                cash += pos["shares"] * price * (1.0 - commission)
+                stopped.append(ticker)
+                trade_events.append("STOP_LOSS")
+                logger.debug("Stop-loss: %s @ $%.2f", ticker, price)
+
+        for t in stopped:
+            del open_positions[t]
+
+        # ── 2. REBALANCEO SEMANAL ────────────────────────────────────────────
+        if date.isoweekday() == rebalance_dow + 1:
+            # Score solo activos con datos hoy
+            scores: dict[str, float] = {}
+            for _, row in today.iterrows():
+                s = score_row(row)
+                if s > -999.0:
+                    scores[str(row["ticker"])] = s
+
+            target = set(
+                sorted(scores, key=lambda k: scores[k], reverse=True)[:max_positions]
+            )
+
+            # Vender posiciones que salen del target
+            to_sell = [t for t in list(open_positions.keys()) if t not in target]
+            for ticker in to_sell:
+                pos = open_positions.pop(ticker)
+                price = price_map.get(ticker, pos["entry_price"])
+                cash += pos["shares"] * price * (1.0 - commission)
+                trade_events.append("SELL")
+
+            # Valor total del portfolio para asignación equitativa
+            pos_value = sum(
+                open_positions[t]["shares"]
+                * price_map.get(t, open_positions[t]["entry_price"])
+                for t in open_positions
+            )
+            total_value = cash + pos_value
+            alloc = total_value / max_positions  # presupuesto por posición
+
+            # Comprar posiciones nuevas del target
+            new_buys = [t for t in target if t not in open_positions]
+            for ticker in new_buys:
+                price = price_map.get(ticker)
+                atr = atr_map.get(ticker, 0.0)
+                if not price or price <= 0.0:
+                    continue
+                budget = min(alloc, cash)
+                if budget <= 0.0:
+                    continue
+                shares = budget * (1.0 - commission) / price
+                stop_price = price - atr * stop_loss_atr_mult
+                cash -= shares * price * (1.0 + commission)
+                open_positions[ticker] = {
+                    "shares": shares,
+                    "entry_price": price,
+                    "stop_loss": stop_price,
+                }
+                trade_events.append("BUY")
+
+        # ── 3. SNAPSHOT DIARIO ───────────────────────────────────────────────
+        pos_value = sum(
+            pos["shares"] * price_map.get(t, pos["entry_price"])
+            for t, pos in open_positions.items()
+        )
+        equity = cash + pos_value
+
+        # Tipo de evento dominante del día
+        if "STOP_LOSS" in trade_events:
+            trade_type = "STOP_LOSS"
+        elif "BUY" in trade_events:
             trade_type = "BUY"
-        elif sell_signal and position > 0.0:
-            cash = position * price * (1.0 - commission)
-            position = 0.0
+        elif "SELL" in trade_events:
             trade_type = "SELL"
+        else:
+            trade_type = "HOLD"
 
-        records.append(
+        daily_records.append(
             {
                 "date": date,
-                "equity": cash + position * price,
+                "equity": equity,
                 "cash": cash,
-                "position_value": position * price,
                 "trade_type": trade_type,
-                "price": price,
+                "tickers_held": ",".join(sorted(open_positions.keys())),
+                "n_positions": len(open_positions),
+                "buys_today": trade_events.count("BUY"),
+                "exits_today": trade_events.count("SELL")
+                + trade_events.count("STOP_LOSS"),
             }
         )
 
-    portfolio = pd.DataFrame(records).set_index("date")
+    portfolio = pd.DataFrame(daily_records).set_index("date")
 
-    n_buys = (portfolio["trade_type"] == "BUY").sum()
+    total_buys = int(portfolio["buys_today"].sum())
     logger.info(
-        f"Backtest completado: {len(feature_vector)} periodos, {n_buys} operaciones de compra"
+        "Backtest completado: %d periodos | %d compras | %d posiciones abiertas al cierre",
+        len(dates),
+        total_buys,
+        len(open_positions),
     )
     return portfolio
 
 
-def calcular_metricas(portfolio: pd.DataFrame, parameters: dict) -> tuple:
-    """Calcula metricas de rendimiento y genera la curva de equity como DataFrame.
+def calcular_benchmark(feature_vector: pd.DataFrame, parameters: dict) -> pd.DataFrame:
+    """Benchmark buy-and-hold sobre SPY (o primer ticker disponible).
 
-    Retorna tupla (metrics_df, equity_df) mapeada a (backtest_metrics, equity_curve).
+    Retorna DataFrame con columnas ``date`` y ``equity`` para PlotlyDataset.
     """
     initial_capital = float(parameters["backtesting"]["initial_capital"])
-    equity = portfolio["equity"]
+    commission = float(parameters["backtesting"]["commission"])
+    benchmark_ticker = str(parameters.get("ticker", "SPY"))
 
-    # Retornos diarios
+    spy = feature_vector[feature_vector["ticker"] == benchmark_ticker].sort_index()
+    if spy.empty:
+        first_ticker = str(feature_vector["ticker"].iloc[0])
+        spy = feature_vector[feature_vector["ticker"] == first_ticker].sort_index()
+        logger.warning(
+            "%s no disponible — usando %s como benchmark", benchmark_ticker, first_ticker
+        )
+
+    # Una fila por fecha
+    spy = spy[~spy.index.duplicated(keep="first")]
+
+    first_price = float(spy["close"].iloc[0])
+    shares = initial_capital * (1.0 - commission) / first_price
+    spy_equity = spy["close"] * shares
+
+    total_return = float(spy_equity.iloc[-1]) / initial_capital - 1.0
+    logger.info("Benchmark %s: retorno total %.1f%%", benchmark_ticker, total_return * 100)
+
+    return pd.DataFrame({"date": spy.index, "equity": spy_equity.values})
+
+
+def calcular_metricas(portfolio: pd.DataFrame, parameters: dict) -> tuple:
+    """Calcula métricas de rendimiento y genera la curva de equity.
+
+    Retorna tupla ``(metrics_df, equity_df)`` mapeada a
+    ``(backtest_metrics, equity_curve)``.
+    """
+    initial_capital = float(parameters["backtesting"]["initial_capital"])
+    equity = portfolio["equity"].dropna()
+
     returns = equity.pct_change().dropna()
 
-    # Sharpe Ratio (252 dias, tasa libre de riesgo = 0)
     if returns.std() > 0:
         sharpe = float(returns.mean() * 252 / (returns.std() * np.sqrt(252)))
     else:
         sharpe = 0.0
 
-    # Max Drawdown
     rolling_max = equity.cummax()
     drawdown = (equity - rolling_max) / rolling_max
     max_drawdown = float(drawdown.min())
 
-    # CAGR
     n_years = len(equity) / 252
     final_equity = float(equity.iloc[-1])
-    cagr = (final_equity / initial_capital) ** (1.0 / n_years) - 1.0 if n_years > 0 else 0.0
+    cagr = (
+        (final_equity / initial_capital) ** (1.0 / n_years) - 1.0 if n_years > 0 else 0.0
+    )
 
-    # Win Rate y Profit Factor (emparejando BUY/SELL consecutivos)
-    buy_prices = portfolio.loc[portfolio["trade_type"] == "BUY", "price"].values
-    sell_prices = portfolio.loc[portfolio["trade_type"] == "SELL", "price"].values
-    n_trades = min(len(buy_prices), len(sell_prices))
+    # Trades = compras (cada compra representa una entrada)
+    n_buys = int(portfolio["buys_today"].sum())
+    n_exits = int(portfolio["exits_today"].sum())
+    n_trades = min(n_buys, n_exits)
+    trades_per_year = round(n_trades / n_years, 1) if n_years > 0 else 0.0
 
-    if n_trades > 0:
-        pnls = [
-            (sell_prices[i] - buy_prices[i]) / buy_prices[i] for i in range(n_trades)
-        ]
-        win_rate = sum(1 for p in pnls if p > 0) / n_trades
-        gains = sum(p for p in pnls if p > 0)
-        losses = abs(sum(p for p in pnls if p < 0))
-        profit_factor = (gains / losses) if losses > 0 else (float("inf") if gains > 0 else 0.0)
-    else:
-        win_rate = 0.0
-        profit_factor = 0.0
+    # Win rate y profit factor sobre retornos diarios
+    pos_days = int((returns > 0).sum())
+    win_rate = pos_days / len(returns) if len(returns) > 0 else 0.0
+
+    gains = float(returns[returns > 0].sum())
+    losses = float(abs(returns[returns < 0].sum()))
+    profit_factor = (
+        (gains / losses)
+        if losses > 0
+        else (float("inf") if gains > 0 else 0.0)
+    )
 
     metrics_df = pd.DataFrame(
         [
@@ -118,17 +240,21 @@ def calcular_metricas(portfolio: pd.DataFrame, parameters: dict) -> tuple:
                 "final_equity_usd": round(final_equity, 2),
                 "total_return_pct": round((final_equity / initial_capital - 1) * 100, 2),
                 "n_trades": n_trades,
+                "trades_per_year": trades_per_year,
             }
         ]
     )
 
     logger.info(
-        f"Metricas: Sharpe={sharpe:.2f} | MaxDD={max_drawdown:.1%} | "
-        f"CAGR={cagr:.1%} | WinRate={win_rate:.1%} | Trades={n_trades}"
+        "Metricas: Sharpe=%.2f | MaxDD=%.1f%% | CAGR=%.1f%% | "
+        "Trades/yr=%.1f | WinRate=%.1f%%",
+        sharpe,
+        max_drawdown * 100,
+        cagr * 100,
+        trades_per_year,
+        win_rate * 100,
     )
 
-    # Curva de equity como DataFrame para PlotlyDataset del catalog
-    equity_df = portfolio[["equity"]].reset_index()
+    equity_df = equity.reset_index()
     equity_df.columns = ["date", "equity"]
-
     return metrics_df, equity_df

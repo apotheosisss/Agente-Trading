@@ -2,7 +2,7 @@
 
 from kedro.pipeline import Pipeline, node
 
-from .nodes import calcular_metricas, ejecutar_backtest
+from .nodes import calcular_benchmark, calcular_metricas, ejecutar_backtest
 
 
 def create_pipeline(**kwargs) -> Pipeline:
@@ -19,6 +19,12 @@ def create_pipeline(**kwargs) -> Pipeline:
                 inputs=["backtest_portfolio", "parameters"],
                 outputs=["backtest_metrics", "equity_curve"],
                 name="nodo_calcular_metricas",
+            ),
+            node(
+                func=calcular_benchmark,
+                inputs=["feature_vector", "parameters"],
+                outputs="benchmark_curve",
+                name="nodo_calcular_benchmark",
             ),
         ]
     )

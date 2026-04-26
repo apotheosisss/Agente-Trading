@@ -10,7 +10,7 @@ def create_pipeline(**kwargs) -> Pipeline:
             node(
                 func=obtener_datos_mercado,
                 inputs=[
-                    "params:ticker",
+                    "params:universe",
                     "params:start_date",
                     "params:end_date",
                 ],
