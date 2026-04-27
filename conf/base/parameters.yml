@@ -1,14 +1,20 @@
 # ── UNIVERSO DE ACTIVOS ───────────────────────────────
+# Bifurcación A: Momentum Concentrado — growth puro, sin cobertura
 universe:
-  - "SPY"     # S&P 500 — referencia de mercado
+  - "SPY"     # S&P 500 — referencia / ancla
   - "QQQ"     # Nasdaq 100 — tecnología
-  - "GLD"     # Oro — cobertura de riesgo
-  - "TLT"     # Bonos 20y — correlación inversa a equity
+  - "NVDA"    # Nvidia — semiconductor / AI líder
+  - "META"    # Meta — mega-cap growth
+  - "AMZN"    # Amazon — cloud + e-commerce
+  - "GOOGL"   # Alphabet — diversificado tech
   - "AAPL"    # Apple — large cap quality
-  - "MSFT"    # Microsoft — large cap quality
+  - "MSFT"    # Microsoft — cloud + AI
   - "BTC-USD" # Bitcoin — alta volatilidad / alto potencial
+  - "ETH-USD" # Ethereum — cripto #2
+  - "XLK"     # Tech ETF — exposición sectorial amplia
+  - "SOXX"    # Semiconductores ETF — ciclo AI
 
-ticker: "SPY"          # ticker principal para reportes LLM
+ticker: "QQQ"          # ticker principal para reportes LLM
 timeframe: "1d"
 start_date: "2019-01-01"   # 6 años: COVID 2020 + bear 2022 + recovery
 end_date: "2024-12-31"
@@ -25,15 +31,15 @@ technical:
 
 # ── RIESGO ───────────────────────────────────────────
 risk:
-  max_positions: 3              # posiciones simultáneas máximas
-  stop_loss_atr_mult: 2.0       # stop = entrada - (ATR × mult)
-  max_position_pct: 0.10        # compatibilidad ejecución
-  stop_loss_pct: 0.03
-  take_profit_pct: 0.06
-  # ── Controles de riesgo avanzados ─────────────────
-  min_entry_score: 1.5          # score mínimo para abrir posición (filtra mercados bajistas)
-  max_drawdown_circuit: 0.15    # caída > 15% desde pico → liquidar todo (circuit breaker)
-  circuit_break_cooldown: 15    # días de espera tras circuit breaker antes de re-entrar
+  max_positions: 2              # concentración en top 2: captura outsized returns de los ganadores
+  stop_loss_atr_mult: 3.0       # stops amplios: growth stocks tienen alta volatilidad
+  max_position_pct: 0.50        # 50% por posición (2 posiciones = 100%)
+  stop_loss_pct: 0.05
+  take_profit_pct: 0.10
+  # ── Controles de riesgo ────────────────────────────
+  min_entry_score: 2.0          # sólo activos con momentum positivo claro entran
+  max_drawdown_circuit: 0.25    # circuit breaker sólo para crashes rápidos (COVID-like)
+  circuit_break_cooldown: 3     # cooldown mínimo: re-entra rápido para no perder recuperaciones
   vix_crisis_threshold: 40      # VIX > 40 → liquidar todo (pánico extremo)
 
 # ── AGENTES LLM ──────────────────────────────────────

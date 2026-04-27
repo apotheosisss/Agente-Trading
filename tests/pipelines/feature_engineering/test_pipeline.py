@@ -13,6 +13,7 @@ COLUMNAS_TECNICAS = [
     "rsi", "macd", "macd_signal", "macd_hist",
     "bb_upper", "bb_mid", "bb_lower",
     "ema_20", "ema_50", "ema_200", "atr",
+    "momentum_90d", "momentum_252d",
 ]
 
 
@@ -64,6 +65,7 @@ def test_vector_columnas(sample_feature_vector):
         "ticker",
         "open", "high", "low", "close", "volume",
         "rsi", "macd", "bb_upper", "ema_20", "ema_50", "ema_200", "atr",
+        "momentum_90d", "momentum_252d",
         "sentiment_score",
     ]
     for col in esperadas:

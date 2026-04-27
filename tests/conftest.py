@@ -64,12 +64,12 @@ def sample_parameters():
         "risk": {
             "max_positions": 3,
             "max_position_pct": 0.33,
-            "stop_loss_atr_mult": 2.0,
-            "stop_loss_pct": 0.03,
-            "take_profit_pct": 0.06,
-            "min_entry_score": 1.5,
-            "max_drawdown_circuit": 0.12,
-            "circuit_break_cooldown": 21,
+            "stop_loss_atr_mult": 3.0,
+            "stop_loss_pct": 0.05,
+            "take_profit_pct": 0.10,
+            "min_entry_score": 1.5,  # bajo en tests para facilitar aserciones
+            "max_drawdown_circuit": 0.20,
+            "circuit_break_cooldown": 15,
             "vix_crisis_threshold": 40,
         },
         "llm": {

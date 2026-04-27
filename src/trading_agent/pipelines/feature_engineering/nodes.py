@@ -61,6 +61,13 @@ def _indicadores_single(grupo: pd.DataFrame, p: dict) -> pd.DataFrame:
     df["ema_50"] = _ema(df["close"], 50)
     df["ema_200"] = _ema(df["close"], ema_200_period)
 
+    # ── Momentum de precio ─────────────────────────────────────────────────
+    # Retorno acumulado 90d (trimestral) y 252d (anual) — señal primaria de
+    # ranking en la estrategia Momentum Concentrado.
+    # Usar fillna(0.0) para no propagar NaNs extra al inicio de la serie.
+    df["momentum_90d"] = df["close"].pct_change(90).fillna(0.0)
+    df["momentum_252d"] = df["close"].pct_change(252).fillna(0.0)
+
     return df.dropna()
 
 
@@ -129,6 +136,7 @@ def ensamblar_vector_features(technical: pd.DataFrame, sentiment: pd.DataFrame) 
         "rsi", "macd", "macd_signal", "macd_hist",
         "bb_upper", "bb_mid", "bb_lower",
         "ema_20", "ema_50", "ema_200", "atr",
+        "momentum_90d", "momentum_252d",
         "sentiment_score",
     ]
     columnas_salida = [c for c in columnas_salida if c in vector.columns]

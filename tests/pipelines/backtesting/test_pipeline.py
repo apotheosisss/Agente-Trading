@@ -13,7 +13,16 @@ from trading_agent.pipelines.backtesting.nodes import (
 # ── helpers ───────────────────────────────────────────────────────────────────
 
 def _make_multi_fv(n_tickers: int = 2, n_days: int = 40, close_val: float = 20_000.0):
-    """Feature vector sintetico multi-ticker con score positivo (EMA200 < close)."""
+    """Feature vector sintetico multi-ticker con score positivo (EMA200 < close).
+
+    Score esperado por fila (Momentum Concentrado):
+      momentum_90d=0.20 → +2.0
+      EMA bullish (close > ema_20 > ema_50) → +2.0
+      MACD alcista → +1.0
+      RSI=70 → +1.5
+      sentiment=0.0 → 0.0
+    Total ≈ 6.5 → supera cualquier min_entry_score razonable.
+    """
     dates = pd.date_range("2023-01-02", periods=n_days, freq="D")
     tickers = [f"T{i}" for i in range(n_tickers)]
     frames = []
@@ -24,15 +33,19 @@ def _make_multi_fv(n_tickers: int = 2, n_days: int = 40, close_val: float = 20_0
                 "ticker": ticker,
                 "open": close, "high": close * 1.001,
                 "low": close * 0.999, "close": close, "volume": 5000.0,
-                "rsi": 50.0,
+                # RSI en zona momentum (>65) → +1.5 de score
+                "rsi": 70.0,
                 # MACD alcista: genera +1.0 de score
                 "macd": 1.0, "macd_signal": 0.0, "macd_hist": 1.0,
                 "bb_upper": close * 1.02, "bb_mid": close, "bb_lower": close * 0.98,
                 # EMA alineada bullish: close > ema_20 > ema_50 → +2.0 de score
                 "ema_20": close * 0.99, "ema_50": close * 0.98,
-                # EMA200 muy por debajo → trend filter pasa, score no aplica filtro
+                # EMA200 muy por debajo → trend filter pasa
                 "ema_200": close * 0.5,
                 "atr": 100.0,
+                # momentum_90d fuerte: +20% trimestral → +2.0 de score
+                "momentum_90d": 0.20,
+                "momentum_252d": 0.40,
                 "sentiment_score": 0.0,
             },
             index=dates,
@@ -185,17 +198,21 @@ def test_backtest_vix_crisis_liquida(sample_parameters):
 def test_backtest_min_score_bloquea_entradas(sample_parameters):
     """Con score bajo (neutral), no se abren posiciones si score < min_entry_score."""
     fv = _make_multi_fv(n_tickers=2, n_days=40)
-    # Hacer que el score sea 0: MACD neutral, EMA neutral
     fv = fv.copy()
-    fv["macd"] = 0.0           # sin senial MACD
-    fv["macd_signal"] = 0.001  # MACD < signal → -1.0
-    fv["ema_20"] = fv["close"] * 0.995  # close > ema20 (bullish EMA, +2)
-    fv["ema_50"] = fv["close"] * 0.98   # ema20 > ema50 (+2, total = +2 - 1 = +1)
+    # Neutralizar todas las seniales para obtener score cercano a 0:
+    fv["macd"] = 0.0            # MACD < signal → -1.0
+    fv["macd_signal"] = 0.001
+    fv["rsi"] = 52.0            # entre 50 y 55 → +0.0 (ninguna condicion RSI)
+    fv["momentum_90d"] = -0.05  # <0 pero >-0.10 → -1.0
+    fv["momentum_252d"] = 0.0
+    fv["ema_20"] = fv["close"] * 0.995   # close > ema20 → bullish parcial
+    fv["ema_50"] = fv["close"] * 0.985   # ema20 > ema50 → +2.0 EMA
+    # Score total: -1.0 (MACD) + 2.0 (EMA) - 1.0 (momentum_90d) + 0 (RSI) = 0.0
     vix = _make_vix(fv.index.unique())
     params = {**sample_parameters}
-    params["risk"] = {**params["risk"], "min_entry_score": 3.0}  # umbral alto
+    params["risk"] = {**params["risk"], "min_entry_score": 1.5}  # umbral > 0.0
     result = ejecutar_backtest(fv, vix, params)
-    # Con score ~1.0 y min_entry_score=3.0, no debe haber compras
+    # Con score 0.0 y min_entry_score=1.5, no debe haber compras
     assert result["buys_today"].sum() == 0, (
         "Con score bajo no deberian abrirse posiciones"
     )

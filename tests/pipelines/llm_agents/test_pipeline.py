@@ -13,7 +13,10 @@ from trading_agent.pipelines.llm_agents.nodes import (
 # ── helpers ───────────────────────────────────────────────────────────────────
 
 def _make_vector_con_score(score_params: dict) -> pd.DataFrame:
-    """Feature vector mínimo de un solo ticker con valores controlados."""
+    """Feature vector mínimo de un solo ticker con valores controlados.
+
+    Soporta 'momentum_90d' para la estrategia Momentum Concentrado.
+    """
     dates = pd.date_range("2023-03-01", periods=35, freq="D")
     close = np.full(35, 20_000.0)
     df = pd.DataFrame(
@@ -31,6 +34,8 @@ def _make_vector_con_score(score_params: dict) -> pd.DataFrame:
             "ema_50": np.full(35, score_params.get("ema_50", 20_000.0)),
             "ema_200": np.full(35, score_params.get("ema_200", 16_000.0)),  # bajo close
             "atr": 200.0,
+            "momentum_90d": score_params.get("momentum_90d", 0.0),
+            "momentum_252d": score_params.get("momentum_252d", 0.0),
             "sentiment_score": score_params.get("sentiment", 0.0),
         },
         index=dates,
@@ -149,12 +154,19 @@ def test_decision_confianza_rango(sample_feature_vector, sample_parameters):
 
 
 def test_decision_buy():
-    """RSI sobreventa + MACD alcista → BUY (con trend filter activo)."""
+    """Momentum fuerte + EMA alcista + RSI strength → BUY (score > 2.5)."""
     fv = _make_vector_con_score({
-        "rsi": 20.0, "macd": 1.0, "macd_signal": 0.0,
-        "ema_20": 20_100.0, "ema_50": 20_050.0,
-        "ema_200": 15_000.0,  # close bien por encima
-        "sentiment": 0.5,
+        # momentum_90d > 0.15 → +2.0
+        "momentum_90d": 0.25,
+        # EMA bullish: close(20_000) > ema_20(19_800) > ema_50(19_600) → +2.0
+        "ema_20": 19_800.0, "ema_50": 19_600.0,
+        "ema_200": 15_000.0,  # trend filter: close bien por encima
+        # MACD alcista → +1.0
+        "macd": 1.0, "macd_signal": 0.0,
+        # RSI > 65 (fuerza momentum) → +1.5
+        "rsi": 70.0,
+        "sentiment": 0.5,  # → +1.0
+        # Score total: 2.0 + 2.0 + 1.0 + 1.5 + 1.0 = 7.5 → BUY
     })
     params = {"model": "gpt-4o-mini", "temperature": 0.1, "confidence_threshold": 0.65}
     tech = agente_tecnico(fv)
@@ -165,12 +177,19 @@ def test_decision_buy():
 
 
 def test_decision_sell():
-    """RSI sobrecompra + MACD bajista → SELL."""
+    """Momentum negativo + EMA bajista + RSI debilidad → SELL (score < -2.5)."""
     fv = _make_vector_con_score({
-        "rsi": 80.0, "macd": -1.0, "macd_signal": 0.0,
-        "ema_20": 19_900.0, "ema_50": 20_000.0,
-        "ema_200": 15_000.0,
-        "sentiment": -0.5,
+        # momentum_90d < -0.10 → -2.0
+        "momentum_90d": -0.15,
+        # EMA bearish: close(20_000) < ema_20(20_200) < ema_50(20_400) → -2.0
+        "ema_20": 20_200.0, "ema_50": 20_400.0,
+        "ema_200": 15_000.0,  # trend filter pasa (close > ema_200) para que score no sea -999
+        # MACD bajista → -1.0
+        "macd": -1.0, "macd_signal": 0.0,
+        # RSI < 40 (debilidad clara) → -1.5
+        "rsi": 35.0,
+        "sentiment": -0.5,  # → -1.0
+        # Score total: -2.0 - 2.0 - 1.0 - 1.5 - 1.0 = -7.5 → SELL
     })
     params = {"model": "gpt-4o-mini", "temperature": 0.1, "confidence_threshold": 0.65}
     tech = agente_tecnico(fv)
