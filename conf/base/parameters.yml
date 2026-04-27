@@ -17,7 +17,7 @@ universe:
 ticker: "QQQ"          # ticker principal para reportes LLM
 timeframe: "1d"
 start_date: "2019-01-01"   # 6 años: COVID 2020 + bear 2022 + recovery
-end_date: "2024-12-31"
+end_date: "2026-04-27"
 
 # ── INDICADORES TÉCNICOS ──────────────────────────────
 technical:
