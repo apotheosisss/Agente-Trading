@@ -37,7 +37,7 @@ technical:
 # Estrategia: actuar antes ante caídas, re-entrar pronto en rebotes.
 risk:
   max_positions: 2              # concentración en top 2: captura el altcoin ganador del ciclo
-  stop_loss_atr_mult: 2.5       # stops más ajustados: ATR crypto ya es grande, no ampliar más
+  stop_loss_atr_mult: 4.5       # optimo: 10 microajustes 3.0-5.7, mejor CAGR+Sharpe en ATR=4.5
   max_position_pct: 0.50        # 50% por posición
   stop_loss_pct: 0.05
   take_profit_pct: 0.10
