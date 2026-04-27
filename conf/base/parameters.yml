@@ -1,5 +1,5 @@
 # ── UNIVERSO DE ACTIVOS ───────────────────────────────
-# Configuración óptima: tech + energía Venezuela (mejor resultado en 5 experimentos)
+# Configuración óptima: tech + energía Venezuela (mejor Sharpe/MaxDD)
 universe:
   # ── Tech / Growth ─────────────────────────────────────
   - "SPY"     # S&P 500 — referencia / ancla
