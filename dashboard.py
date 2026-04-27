@@ -117,6 +117,25 @@ def load_walk_forward() -> pd.DataFrame | None:
         return None
 
 
+@st.cache_data(ttl=300)  # 5 min — los mercados Polymarket no cambian tan rápido
+def load_polymarket() -> tuple[pd.DataFrame | None, str | None]:
+    """Carga señales Polymarket y el reporte de texto."""
+    signals_path = DATA / "01_raw" / "polymarket_signals.csv"
+    report_path = DATA / "08_reporting" / "poly_report.txt"
+
+    signals = None
+    report = None
+    try:
+        signals = pd.read_csv(signals_path)
+    except (FileNotFoundError, Exception):
+        pass
+    try:
+        report = report_path.read_text(encoding="utf-8")
+    except (FileNotFoundError, Exception):
+        pass
+    return signals, report
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # 3 — CHART BUILDERS
 # ─────────────────────────────────────────────────────────────────────────────
@@ -533,6 +552,109 @@ def render_tab_backtesting(
                 )
 
 
+def render_tab_polymarket(
+    signals: pd.DataFrame | None,
+    report: str | None,
+    trading_signal: pd.DataFrame | None,
+) -> None:
+    """Tab de señales Polymarket: mercados de predicción como contexto macro."""
+
+    st.markdown(
+        "### 🔮 Señales de Mercados de Predicción (Polymarket)\n"
+        "Los precios de Polymarket reflejan lo que miles de personas creen que va "
+        "a pasar en el mundo. Cuando hay un mercado relevante para nuestros activos "
+        "(e.g. 'Will the Fed cut rates?'), su probabilidad ajusta el score final."
+    )
+
+    if signals is None or signals.empty:
+        st.warning(
+            "No hay datos de Polymarket disponibles. "
+            "Ejecuta `kedro run` con conexión a internet para cargarlos."
+        )
+        st.info(
+            "**Cómo funciona:** el sistema consulta automáticamente Polymarket "
+            "cada vez que se ejecuta, busca mercados activos relacionados con "
+            "Fed, recesión, cripto y tech, y usa las probabilidades para ajustar "
+            "la señal de compra/venta de cada activo."
+        )
+        return
+
+    st.divider()
+
+    # ── Señal macro global ────────────────────────────────────────────────────
+    macro = signals[signals["ticker"] == "_macro"]
+    if not macro.empty:
+        ms = float(macro["poly_score"].iloc[0])
+        mn = int(macro["n_markets"].iloc[0])
+        col_m, col_n = st.columns([3, 1])
+        with col_m:
+            if ms > 0.2:
+                st.success(f"🟢 **Macro global bullish** — score Polymarket: **{ms:+.2f}**")
+            elif ms < -0.2:
+                st.error(f"🔴 **Macro global bearish** — score Polymarket: **{ms:+.2f}**")
+            else:
+                st.info(f"⚪ **Macro global neutral** — score Polymarket: **{ms:+.2f}**")
+        col_n.metric("Mercados encontrados", mn)
+
+    st.divider()
+
+    # ── Tabla de señales por activo ───────────────────────────────────────────
+    st.subheader("Impacto por activo")
+
+    ticker_signals = signals[signals["ticker"] != "_macro"].copy()
+    if not ticker_signals.empty:
+        active = ticker_signals[ticker_signals["poly_score"] != 0.0].sort_values(
+            "poly_score", ascending=False
+        )
+        neutral = ticker_signals[ticker_signals["poly_score"] == 0.0]
+
+        if not active.empty:
+            for _, row in active.iterrows():
+                t = str(row["ticker"])
+                ps = float(row["poly_score"])
+                nm = int(row["n_markets"])
+                top = str(row.get("top_market", ""))
+
+                # Buscar si el score base del trading signal cambió
+                delta_note = ""
+                if trading_signal is not None:
+                    ts_row = trading_signal[trading_signal["ticker"] == t]
+                    if not ts_row.empty and "poly_boost" in ts_row.columns:
+                        boost = float(ts_row["poly_boost"].iloc[0])
+                        if boost != 0.0:
+                            delta_note = f"  →  ajustó el score en **{boost:+.2f}**"
+
+                icon = "🟢" if ps > 0 else "🔴"
+                st.markdown(
+                    f"{icon} **{t}** &nbsp; poly_score: `{ps:+.2f}` &nbsp; "
+                    f"({nm} mercado{'s' if nm != 1 else ''}){delta_note}"
+                )
+                if top and top != "Sin mercados relevantes":
+                    for m in top.split(" | ")[:2]:
+                        st.caption(f"  &nbsp;&nbsp; • {m}")
+
+        if not neutral.empty:
+            st.caption(
+                f"Sin señal activa: {', '.join(neutral['ticker'].tolist())} — "
+                f"no se encontraron mercados relevantes con suficiente volumen."
+            )
+    else:
+        st.info("No se encontraron señales específicas por activo.")
+
+    # ── Reporte completo colapsable ───────────────────────────────────────────
+    if report:
+        st.divider()
+        with st.expander("Ver reporte completo"):
+            st.code(report, language=None)
+
+    st.divider()
+    st.caption(
+        "Los datos de Polymarket son orientativos — reflejan la opinión del mercado, "
+        "no predicciones garantizadas. El peso máximo en el score final es ±1.5 puntos "
+        f"(sobre un máximo de {9.0:.0f} puntos totales)."
+    )
+
+
 def render_tab_tecnico(features: pd.DataFrame | None) -> None:
     """Análisis técnico multi-ticker con selector de activo y EMA 200."""
     if features is None:
@@ -576,7 +698,7 @@ def main() -> None:
 
     with st.sidebar:
         st.title("📈 Trading Agent")
-        st.caption("Dashboard multi-asset — M6")
+        st.caption("Dashboard multi-asset + Polymarket")
         st.divider()
         if st.button("🔄 Actualizar datos", use_container_width=True):
             st.cache_data.clear()
@@ -584,21 +706,33 @@ def main() -> None:
         st.divider()
         st.caption("📁 Datos desde `data/`")
         st.caption("🔒 Paper trading únicamente")
-        st.caption("📅 Universo: SPY · QQQ · GLD · TLT · AAPL · MSFT · BTC-USD")
+        st.caption(
+            "📅 Universo: SPY · QQQ · NVDA · META · AMZN · GOOGL · "
+            "AAPL · MSFT · BTC-USD · ETH-USD · XLK · SOXX"
+        )
+        st.divider()
+        st.caption("🔮 Polymarket integrado como señal macro")
 
     st.title("Trading Agent — Dashboard Multi-Asset")
 
-    signal       = load_signal()
-    portfolio    = load_portfolio()
-    execution    = load_execution()
-    metrics      = load_metrics()
-    equity       = load_equity_curve()
-    benchmark    = load_benchmark_curve()
-    features     = load_features()
-    walk_forward = load_walk_forward()
+    signal            = load_signal()
+    portfolio         = load_portfolio()
+    execution         = load_execution()
+    metrics           = load_metrics()
+    equity            = load_equity_curve()
+    benchmark         = load_benchmark_curve()
+    features          = load_features()
+    walk_forward      = load_walk_forward()
+    poly_signals, poly_report = load_polymarket()
 
-    tab1, tab2, tab3, tab4 = st.tabs(
-        ["📊 Ranking Señales", "💼 Portafolio", "📈 Backtesting", "🔬 Análisis Técnico"]
+    tab1, tab2, tab3, tab4, tab5 = st.tabs(
+        [
+            "📊 Ranking Señales",
+            "💼 Portafolio",
+            "📈 Backtesting",
+            "🔬 Análisis Técnico",
+            "🔮 Polymarket",
+        ]
     )
 
     with tab1:
@@ -612,6 +746,9 @@ def main() -> None:
 
     with tab4:
         render_tab_tecnico(features)
+
+    with tab5:
+        render_tab_polymarket(poly_signals, poly_report, signal)
 
 
 if __name__ == "__main__":

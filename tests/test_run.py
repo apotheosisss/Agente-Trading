@@ -5,9 +5,12 @@ from kedro.framework.startup import bootstrap_project
 
 
 def test_pipelines_registrados():
-    """Verifica que los 5 pipelines están registrados y tienen nodos."""
+    """Verifica que los 6 pipelines están registrados y tienen nodos."""
     bootstrap_project(Path.cwd())
-    nombres_esperados = {"ingestion", "feature_engineering", "llm_agents", "backtesting", "execution"}
+    nombres_esperados = {
+        "ingestion", "feature_engineering", "llm_agents",
+        "backtesting", "execution", "polymarket",
+    }
     registrados = set(pipelines.keys()) - {"__default__"}
     assert nombres_esperados <= registrados
 

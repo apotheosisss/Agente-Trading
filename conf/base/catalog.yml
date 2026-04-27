@@ -112,6 +112,19 @@ alpaca_positions:
   load_args:
     encoding: utf-8
 
+# ── POLYMARKET ───────────────────────────────────────
+polymarket_signals:
+  type: pandas.CSVDataset
+  filepath: data/01_raw/polymarket_signals.csv
+  save_args:
+    encoding: utf-8
+  load_args:
+    encoding: utf-8
+
+poly_report:
+  type: text.TextDataset
+  filepath: data/08_reporting/poly_report.txt
+
 # ── EXECUTION ────────────────────────────────────────
 execution_record:
   type: pandas.CSVDataset

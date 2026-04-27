@@ -35,6 +35,8 @@ def create_pipeline(**kwargs) -> Pipeline:
                     "feature_vector",
                     "params:llm",
                     "params:universe",
+                    "poly_report",
+                    "polymarket_signals",
                 ],
                 outputs="trading_signal",
                 name="nodo_agente_decision",

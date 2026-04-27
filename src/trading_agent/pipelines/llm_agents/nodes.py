@@ -146,6 +146,27 @@ def agente_riesgo(feature_vector: pd.DataFrame) -> str:
     return report
 
 
+def _get_poly_boost(ticker: str, poly_signals: pd.DataFrame) -> float:
+    """Obtiene el poly_score para un ticker específico.
+
+    Combina la señal macro global (_macro) con la señal específica del ticker.
+    Si no hay datos, devuelve 0.0.
+    """
+    if poly_signals is None or poly_signals.empty:
+        return 0.0
+
+    macro_rows = poly_signals[poly_signals["ticker"] == "_macro"]
+    ticker_rows = poly_signals[poly_signals["ticker"] == ticker]
+
+    macro_score = float(macro_rows["poly_score"].iloc[0]) if not macro_rows.empty else 0.0
+    ticker_score = float(ticker_rows["poly_score"].iloc[0]) if not ticker_rows.empty else 0.0
+
+    # Combinar: macro como base + señal específica del ticker
+    # Se usa promedio ponderado: 40% macro, 60% ticker-específico
+    combined = macro_score * 0.4 + ticker_score * 0.6
+    return round(combined, 3)
+
+
 def agente_decision(
     tech_report: str,
     sent_report: str,
@@ -153,40 +174,64 @@ def agente_decision(
     feature_vector: pd.DataFrame,
     parameters: dict,
     universe: list,
+    poly_report: str = "",
+    poly_signals: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
     """Ranking multi-activo: score + señal (BUY/HOLD/SELL) por ticker.
 
     Usa la misma lógica de scoring que el backtest (shared_utils.score_row).
+    Si poly_signals está disponible, el score se ajusta con las probabilidades
+    de Polymarket antes de determinar la señal final.
     Si OPENAI_API_KEY está disponible, enriquece el razonamiento con LLM.
+
+    Args:
+        poly_report:  Reporte texto de señales Polymarket (opcional).
+        poly_signals: DataFrame con poly_score por ticker (opcional).
+                      Si no se provee, funciona igual que antes.
     """
     last_day = feature_vector[feature_vector.index == feature_vector.index.max()]
 
     rows = []
     for _, row in last_day.iterrows():
         ticker = str(row["ticker"])
-        score = score_row(row)
+        base_score = score_row(row)
 
-        if score == -999.0:
+        if base_score == -999.0:
             signal = "HOLD"
             confidence = 0.0
             reasoning = "Excluido: precio por debajo de EMA 200 (filtro de tendencia)"
+            final_score = -999.0
         else:
-            if score > 2.5:
+            # Aplicar boost de Polymarket al score cuantitativo
+            poly_boost = _get_poly_boost(ticker, poly_signals)
+            final_score = base_score + poly_boost
+
+            if final_score > 2.5:
                 signal = "BUY"
-            elif score < -2.5:
+            elif final_score < -2.5:
                 signal = "SELL"
             else:
                 signal = "HOLD"
-            confidence = round(min(abs(score) / MAX_SCORE, 0.95), 2)
+
+            confidence = round(min(abs(final_score) / MAX_SCORE, 0.95), 2)
+
+            poly_note = ""
+            if poly_boost != 0.0:
+                direction = "↑ Poly+" if poly_boost > 0 else "↓ Poly"
+                poly_note = f" | {direction}{poly_boost:+.2f}"
+
             reasoning = (
-                f"Score cuantitativo: {score:.1f}/{MAX_SCORE:.1f} → {signal}"
+                f"Score técnico: {base_score:.1f}{poly_note} "
+                f"→ final: {final_score:.1f}/{MAX_SCORE:.1f} → {signal}"
             )
 
         rows.append(
             {
                 "ticker": ticker,
                 "signal": signal,
-                "score": round(score, 2) if score != -999.0 else -999.0,
+                "score": round(final_score, 2) if final_score != -999.0 else -999.0,
+                "score_base": round(base_score, 2) if base_score != -999.0 else -999.0,
+                "poly_boost": _get_poly_boost(ticker, poly_signals) if base_score != -999.0 else 0.0,
                 "confidence": confidence,
                 "reasoning": reasoning,
                 "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -202,9 +247,10 @@ def agente_decision(
         client = OpenAI()
         top_tickers = signal_df[signal_df["signal"] == "BUY"]["ticker"].tolist()[:3]
         if top_tickers:
+            poly_context = f"\n{poly_report}" if poly_report else ""
             prompt = (
                 f"Eres un analista de trading senior. Revisa esta información:\n\n"
-                f"{tech_report}\n{sent_report}\n{risk_report}\n\n"
+                f"{tech_report}\n{sent_report}\n{risk_report}{poly_context}\n\n"
                 f"El modelo cuantitativo sugiere BUY en: {', '.join(top_tickers)}.\n"
                 f"En máximo 80 palabras, justifica brevemente estas selecciones."
             )
@@ -223,11 +269,12 @@ def agente_decision(
         logger.info("LLM no disponible (%s) — razonamiento basado en reglas", type(exc).__name__)
 
     n_buy = (signal_df["signal"] == "BUY").sum()
+    has_poly = poly_signals is not None and not poly_signals.empty
     logger.info(
-        "Señales generadas: %d tickers | %d BUY | %d HOLD | %d SELL",
-        len(signal_df),
-        n_buy,
+        "Señales generadas: %d tickers | %d BUY | %d HOLD | %d SELL | Polymarket=%s",
+        len(signal_df), n_buy,
         (signal_df["signal"] == "HOLD").sum(),
         (signal_df["signal"] == "SELL").sum(),
+        "activo" if has_poly else "inactivo",
     )
     return signal_df

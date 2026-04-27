@@ -48,6 +48,12 @@ llm:
   temperature: 0.1
   confidence_threshold: 0.65
 
+# ── POLYMARKET ───────────────────────────────────────
+polymarket:
+  base_url: "https://gamma-api.polymarket.com"
+  min_volume: 5000              # solo mercados con al menos $5k de volumen
+  max_score_contribution: 1.5   # aporte máximo al score final (±1.5 puntos)
+
 # ── BACKTESTING ──────────────────────────────────────
 backtesting:
   initial_capital: 10000
