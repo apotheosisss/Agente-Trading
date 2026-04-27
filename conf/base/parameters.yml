@@ -1,6 +1,7 @@
 # ── UNIVERSO DE ACTIVOS ───────────────────────────────
-# Bifurcación A: Momentum Concentrado — growth puro, sin cobertura
+# Bifurcación A: Momentum Concentrado — growth puro + energía Venezuela
 universe:
+  # ── Tech / Growth (universo original) ────────────────
   - "SPY"     # S&P 500 — referencia / ancla
   - "QQQ"     # Nasdaq 100 — tecnología
   - "NVDA"    # Nvidia — semiconductor / AI líder
@@ -13,6 +14,13 @@ universe:
   - "ETH-USD" # Ethereum — cripto #2
   - "XLK"     # Tech ETF — exposición sectorial amplia
   - "SOXX"    # Semiconductores ETF — ciclo AI
+  # ── Energía / Venezuela ──────────────────────────────
+  - "CVX"     # Chevron — única empresa EEUU con licencia para operar en Venezuela
+  - "SLB"     # SLB (Schlumberger) — servicios petroleros, reconstrucción infraestructura
+  - "HAL"     # Halliburton — perforación y completación, operó en Venezuela pre-sanciones
+  - "VLO"     # Valero — refinería top EEUU, procesa crudo pesado venezolano
+  - "OXY"     # Occidental Petroleum — alta exposición precio crudo, Latinoamérica
+  - "XLE"     # Energy ETF — exposición diversificada sector energético
 
 ticker: "QQQ"          # ticker principal para reportes LLM
 timeframe: "1d"
