@@ -1,5 +1,5 @@
 # ── UNIVERSO DE ACTIVOS ───────────────────────────────
-# Bifurcación A: Momentum Concentrado — multi-sector + énfasis defensa geopolítica
+# Configuración óptima: tech + energía Venezuela (mejor resultado en 5 experimentos)
 universe:
   # ── Tech / Growth ─────────────────────────────────────
   - "SPY"     # S&P 500 — referencia / ancla
@@ -21,24 +21,6 @@ universe:
   - "VLO"     # Valero — refinería top EEUU, procesa crudo pesado venezolano
   - "OXY"     # Occidental Petroleum — alta exposición precio crudo, Latinoamérica
   - "XLE"     # Energy ETF — exposición diversificada sector energético
-  # ── Defensa / Geopolítica (énfasis) ───────────────────
-  - "LMT"     # Lockheed Martin — F-35, misiles, mayor contratista defensa EEUU
-  - "RTX"     # RTX (Raytheon) — misiles Patriot, sistemas AA, alta demanda OTAN
-  - "NOC"     # Northrop Grumman — bombarderos B-21, sistemas espaciales y ciberseguridad
-  - "GD"      # General Dynamics — tanques Abrams, submarinos nucleares, Gulfstream
-  - "HII"     # Huntington Ingalls — único astillero naval militar de EEUU (portaaviones)
-  - "ITA"     # iShares Aerospace & Defense ETF — sector defensa diversificado
-  # ── Salud / Farmacéutico ──────────────────────────────
-  - "LLY"     # Eli Lilly — GLP-1 (obesidad/diabetes), mayor boom farmacéutico en décadas
-  - "XLV"     # Health Care Select Sector ETF — sector salud diversificado
-  # ── Financiero ────────────────────────────────────────
-  - "JPM"     # JPMorgan Chase — mayor banco EEUU, beneficio de tipos altos
-  # ── Industria / Nueva Infraestructura ─────────────────
-  - "GEV"     # GE Vernova — infraestructura eléctrica para data centers de IA
-  - "CAT"     # Caterpillar — maquinaria pesada, minería e infraestructura global
-  # ── Materiales / Commodities ──────────────────────────
-  - "GLD"     # SPDR Gold ETF — oro, refugio en crisis y cobertura geopolítica
-  - "FCX"     # Freeport-McMoRan — cobre, metal clave en transición energética y defensa
 
 ticker: "QQQ"          # ticker principal para reportes LLM
 timeframe: "1d"
