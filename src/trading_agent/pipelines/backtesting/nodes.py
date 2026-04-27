@@ -46,7 +46,8 @@ def ejecutar_backtest(
     commission = float(bt["commission"])
     max_positions = int(parameters["risk"]["max_positions"])
     stop_loss_atr_mult = float(parameters["risk"]["stop_loss_atr_mult"])
-    rebalance_dow = int(bt.get("rebalance_day", 0))
+    rebalance_dow      = int(bt.get("rebalance_day", 0))
+    rebalance_interval = int(bt.get("rebalance_interval", 0))  # 0 = usar rebalance_dow
 
     risk = parameters["risk"]
     min_entry_score = float(risk.get("min_entry_score", 1.5))
@@ -74,6 +75,7 @@ def ejecutar_backtest(
     peak_equity = initial_capital
     cooldown_remaining = 0      # días de espera tras circuit breaker
     daily_records = []
+    days_since_rebalance = 0   # contador para rebalance_interval
 
     dates = sorted(feature_vector.index.unique())
 
@@ -153,8 +155,15 @@ def ejecutar_backtest(
 
         in_cooldown = cooldown_remaining > 0
 
-        # ── 4. REBALANCEO SEMANAL (lunes) ─────────────────────────────────────
-        if date.isoweekday() == rebalance_dow + 1:
+        # ── 4. REBALANCEO (semanal por dia-semana O cada N dias) ──────────────
+        days_since_rebalance += 1
+        if rebalance_interval > 0:
+            do_rebalance = (days_since_rebalance >= rebalance_interval)
+            if do_rebalance:
+                days_since_rebalance = 0
+        else:
+            do_rebalance = (date.isoweekday() == rebalance_dow + 1)
+        if do_rebalance:
             # Score con filtro de score mínimo para nuevas entradas
             scores: dict[str, float] = {}
             for _, row in today.iterrows():
