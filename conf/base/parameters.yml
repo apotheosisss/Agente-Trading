@@ -65,4 +65,4 @@ backtesting:
   commission: 0.001
   rebalance_day: 0              # 0 = lunes (isoweekday - 1)
   walk_forward_split: "2022-01-01"  # in-sample: bull 2019-2021 | OOS: bear 2022 + recovery 2023-2026
-  rebalance_interval: 5             # dias de trading entre rebalanceos (1=diario, 5=semanal, 0=usar rebalance_day)
+  rebalance_interval: 15            # cada 3 semanas — optimo del barrido (CAGR 61.5%, Sharpe 1.091)
