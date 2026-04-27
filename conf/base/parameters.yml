@@ -42,7 +42,7 @@ risk:
   stop_loss_pct: 0.05
   take_profit_pct: 0.10
   # ── Controles de riesgo ────────────────────────────
-  min_entry_score: 2.0          # mismo umbral: exige momentum claro antes de entrar
+  min_entry_score: 1.0          # optimo: menor umbral captura momentum naciente en crypto
   max_drawdown_circuit: 0.40    # 40%: en crypto -35% aún puede ser corrección; -40% es bear real
   circuit_break_cooldown: 2     # cooldown corto: crypto rebota rápido (no perder recuperación)
   vix_crisis_threshold: 55      # VIX mide renta variable, no crypto — umbral más alto
