@@ -1,30 +1,25 @@
 # ── UNIVERSO DE ACTIVOS ───────────────────────────────
-# Configuración óptima: tech + energía Venezuela (mejor Sharpe/MaxDD)
+# Rama: feature/crypto — inversión corto/mediano plazo
+# Universo crypto-heavy: capturar bull runs con rotación entre altcoins
 universe:
-  # ── Tech / Growth ─────────────────────────────────────
-  - "SPY"     # S&P 500 — referencia / ancla
-  - "QQQ"     # Nasdaq 100 — tecnología
-  - "NVDA"    # Nvidia — semiconductor / AI líder
-  - "META"    # Meta — mega-cap growth
-  - "AMZN"    # Amazon — cloud + e-commerce
-  - "GOOGL"   # Alphabet — diversificado tech
-  - "AAPL"    # Apple — large cap quality
-  - "MSFT"    # Microsoft — cloud + AI
-  - "BTC-USD" # Bitcoin — alta volatilidad / alto potencial
-  - "ETH-USD" # Ethereum — cripto #2
-  - "XLK"     # Tech ETF — exposición sectorial amplia
-  - "SOXX"    # Semiconductores ETF — ciclo AI
-  # ── Energía / Venezuela ───────────────────────────────
-  - "CVX"     # Chevron — única empresa EEUU con licencia para operar en Venezuela
-  - "SLB"     # SLB (Schlumberger) — servicios petroleros, reconstrucción infraestructura
-  - "HAL"     # Halliburton — perforación y completación, operó en Venezuela pre-sanciones
-  - "VLO"     # Valero — refinería top EEUU, procesa crudo pesado venezolano
-  - "OXY"     # Occidental Petroleum — alta exposición precio crudo, Latinoamérica
-  - "XLE"     # Energy ETF — exposición diversificada sector energético
+  # ── Ancla macro ───────────────────────────────────────
+  - "SPY"     # S&P 500 — refugio cuando crypto cae; correlación baja
+  # ── Crypto large-cap (mayor liquidez) ────────────────
+  - "BTC-USD" # Bitcoin — reserva de valor, lidera ciclos
+  - "ETH-USD" # Ethereum — DeFi, NFTs, contratos inteligentes
+  - "BNB-USD" # Binance Coin — utility token del mayor exchange
+  - "XRP-USD" # Ripple — pagos internacionales, regulación aclarada
+  - "SOL-USD" # Solana — alta velocidad, ecosistema creciente
+  - "AVAX-USD"# Avalanche — L1 competidor de ETH
+  - "LINK-USD"# Chainlink — infraestructura oráculos DeFi
+  - "DOGE-USD"# Dogecoin — alta liquidez, momentum especulativo
+  - "LTC-USD" # Litecoin — "digital silver", ciclo vinculado a BTC
+  # ── Acciones proxy crypto (alta correlación, mayor liquidez bolsa) ──
+  - "COIN"    # Coinbase — ingresos ligados a volumen crypto, más estable que mineros
 
-ticker: "QQQ"          # ticker principal para reportes LLM
+ticker: "BTC-USD"      # ticker principal para reportes LLM
 timeframe: "1d"
-start_date: "2019-01-01"   # 6 años: COVID 2020 + bear 2022 + recovery
+start_date: "2019-01-01"   # incluye ciclo completo: bull 2021 + bear 2022 + recovery
 end_date: "2026-04-27"
 
 # ── INDICADORES TÉCNICOS ──────────────────────────────
@@ -38,17 +33,19 @@ technical:
   ema_200: 200           # filtro de tendencia principal (200d clasico)
 
 # ── RIESGO ───────────────────────────────────────────
+# Crypto: crashes rápidos y profundos (-70%), recuperaciones también rápidas.
+# Estrategia: actuar antes ante caídas, re-entrar pronto en rebotes.
 risk:
-  max_positions: 2              # concentración en top 2: captura outsized returns de los ganadores
-  stop_loss_atr_mult: 3.0       # stops amplios: growth stocks tienen alta volatilidad
-  max_position_pct: 0.50        # 50% por posición (2 posiciones = 100%)
+  max_positions: 2              # concentración en top 2: captura el altcoin ganador del ciclo
+  stop_loss_atr_mult: 2.5       # stops más ajustados: ATR crypto ya es grande, no ampliar más
+  max_position_pct: 0.50        # 50% por posición
   stop_loss_pct: 0.05
   take_profit_pct: 0.10
   # ── Controles de riesgo ────────────────────────────
-  min_entry_score: 2.0          # sólo activos con momentum positivo claro entran
-  max_drawdown_circuit: 0.25    # circuit breaker sólo para crashes rápidos (COVID-like)
-  circuit_break_cooldown: 3     # cooldown mínimo: re-entra rápido para no perder recuperaciones
-  vix_crisis_threshold: 40      # VIX > 40 → liquidar todo (pánico extremo)
+  min_entry_score: 2.0          # mismo umbral: exige momentum claro antes de entrar
+  max_drawdown_circuit: 0.40    # 40%: en crypto -35% aún puede ser corrección; -40% es bear real
+  circuit_break_cooldown: 2     # cooldown corto: crypto rebota rápido (no perder recuperación)
+  vix_crisis_threshold: 55      # VIX mide renta variable, no crypto — umbral más alto
 
 # ── AGENTES LLM ──────────────────────────────────────
 llm:
@@ -67,4 +64,4 @@ backtesting:
   initial_capital: 10000
   commission: 0.001
   rebalance_day: 0              # 0 = lunes (isoweekday - 1)
-  walk_forward_split: "2022-01-01"  # in-sample hasta aquí, out-of-sample después
+  walk_forward_split: "2022-01-01"  # in-sample: bull 2019-2021 | OOS: bear 2022 + recovery 2023-2026
