@@ -108,6 +108,15 @@ def load_features() -> pd.DataFrame | None:
         return None
 
 
+@st.cache_data(ttl=60)
+def load_walk_forward() -> pd.DataFrame | None:
+    path = DATA / "08_reporting" / "walk_forward.csv"
+    try:
+        return pd.read_csv(path)
+    except FileNotFoundError:
+        return None
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # 3 — CHART BUILDERS
 # ─────────────────────────────────────────────────────────────────────────────
@@ -444,8 +453,9 @@ def render_tab_backtesting(
     metrics: pd.Series | None,
     equity_json: dict | None,
     benchmark_json: dict | None,
+    walk_forward: pd.DataFrame | None = None,
 ) -> None:
-    """Métricas de rendimiento + curva de equity vs benchmark."""
+    """Métricas de rendimiento + curva de equity vs benchmark + walk-forward."""
     if metrics is None:
         st.warning("No hay métricas de backtesting disponibles.")
         return
@@ -457,10 +467,12 @@ def render_tab_backtesting(
     col4.metric("Win Rate", f"{float(metrics['win_rate_pct']):.1f}%")
     col5.metric("Trades/año", f"{float(metrics.get('trades_per_year', 0)):.0f}")
 
-    col6, col7, col8 = st.columns([1, 1, 2])
+    col6, col7, col8, col9 = st.columns([1, 1, 1, 1])
     col6.metric("Equity final", f"${float(metrics['final_equity_usd']):,.0f}")
     col7.metric("Retorno total", f"{float(metrics['total_return_pct']):.1f}%")
     col8.metric("N° Operaciones", int(metrics["n_trades"]))
+    cb = int(metrics.get("circuit_break_events", 0))
+    col9.metric("Circuit Breaks", cb, help="Veces que el circuit breaker protegió el capital")
 
     st.divider()
     st.subheader("Curva de Equity vs SPY Buy & Hold")
@@ -474,6 +486,51 @@ def render_tab_backtesting(
         "La línea naranja (--) representa el benchmark SPY buy-and-hold "
         "con el mismo capital inicial."
     )
+
+    # ── Walk-Forward Validation ────────────────────────────────────────────────
+    if walk_forward is not None and len(walk_forward) > 0:
+        st.divider()
+        st.subheader("Validación Walk-Forward")
+        st.caption(
+            "Compara el rendimiento en el período de entrenamiento (in-sample) "
+            "vs el período no visto (out-of-sample).  Un sistema robusto muestra "
+            "métricas similares en ambas ventanas."
+        )
+
+        cols = st.columns(len(walk_forward))
+        for col, (_, row) in zip(cols, walk_forward.iterrows()):
+            periodo = str(row["periodo"])
+            sharpe = float(row["sharpe"])
+            max_dd = float(row["max_drawdown_pct"])
+            cagr = float(row["cagr_pct"])
+            n_dias = int(row["n_dias"])
+
+            label = "In-Sample" if "In-sample" in periodo else (
+                "Out-of-Sample" if "Out-of-sample" in periodo else "Completo"
+            )
+            with col:
+                st.markdown(f"**{label}**")
+                st.caption(f"({n_dias} dias)")
+                color = "normal" if sharpe > 0 else "inverse"
+                st.metric("Sharpe", f"{sharpe:.2f}")
+                st.metric("MaxDD", f"{max_dd:.1f}%")
+                st.metric("CAGR", f"{cagr:.1f}%")
+
+        if len(walk_forward) >= 2:
+            is_row = walk_forward[walk_forward["periodo"].str.contains("In-sample")].iloc[0]
+            oos_row = walk_forward[walk_forward["periodo"].str.contains("Out-of-sample")].iloc[0]
+            sharpe_ratio = float(oos_row["sharpe"]) / max(float(is_row["sharpe"]), 0.01)
+            if sharpe_ratio > 0.5:
+                st.success(
+                    f"Robustez aceptable: Sharpe out-of-sample = "
+                    f"{float(oos_row['sharpe']):.2f} "
+                    f"({sharpe_ratio:.0%} del in-sample)."
+                )
+            else:
+                st.warning(
+                    f"Divergencia in/out-of-sample detectada (ratio={sharpe_ratio:.0%}). "
+                    f"Considera incrementar la muestra o reducir la complejidad del modelo."
+                )
 
 
 def render_tab_tecnico(features: pd.DataFrame | None) -> None:
@@ -531,13 +588,14 @@ def main() -> None:
 
     st.title("Trading Agent — Dashboard Multi-Asset")
 
-    signal    = load_signal()
-    portfolio = load_portfolio()
-    execution = load_execution()
-    metrics   = load_metrics()
-    equity    = load_equity_curve()
-    benchmark = load_benchmark_curve()
-    features  = load_features()
+    signal       = load_signal()
+    portfolio    = load_portfolio()
+    execution    = load_execution()
+    metrics      = load_metrics()
+    equity       = load_equity_curve()
+    benchmark    = load_benchmark_curve()
+    features     = load_features()
+    walk_forward = load_walk_forward()
 
     tab1, tab2, tab3, tab4 = st.tabs(
         ["📊 Ranking Señales", "💼 Portafolio", "📈 Backtesting", "🔬 Análisis Técnico"]
@@ -550,7 +608,7 @@ def main() -> None:
         render_tab_portfolio(portfolio, execution)
 
     with tab3:
-        render_tab_backtesting(metrics, equity, benchmark)
+        render_tab_backtesting(metrics, equity, benchmark, walk_forward)
 
     with tab4:
         render_tab_tecnico(features)

@@ -21,7 +21,7 @@ technical:
   macd_signal: 9
   bb_period: 20
   bb_std: 2
-  ema_200: 200           # filtro de tendencia principal
+  ema_200: 200           # filtro de tendencia principal (200d clasico)
 
 # ── RIESGO ───────────────────────────────────────────
 risk:
@@ -30,6 +30,11 @@ risk:
   max_position_pct: 0.10        # compatibilidad ejecución
   stop_loss_pct: 0.03
   take_profit_pct: 0.06
+  # ── Controles de riesgo avanzados ─────────────────
+  min_entry_score: 1.5          # score mínimo para abrir posición (filtra mercados bajistas)
+  max_drawdown_circuit: 0.15    # caída > 15% desde pico → liquidar todo (circuit breaker)
+  circuit_break_cooldown: 15    # días de espera tras circuit breaker antes de re-entrar
+  vix_crisis_threshold: 40      # VIX > 40 → liquidar todo (pánico extremo)
 
 # ── AGENTES LLM ──────────────────────────────────────
 llm:
@@ -41,4 +46,5 @@ llm:
 backtesting:
   initial_capital: 10000
   commission: 0.001
-  rebalance_day: 0       # 0 = lunes (isoweekday - 1)
+  rebalance_day: 0              # 0 = lunes (isoweekday - 1)
+  walk_forward_split: "2022-01-01"  # in-sample hasta aquí, out-of-sample después

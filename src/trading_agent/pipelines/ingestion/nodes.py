@@ -45,6 +45,48 @@ def obtener_datos_mercado(universe: list, start_date: str, end_date: str) -> pd.
     return result
 
 
+def obtener_vix(start_date: str, end_date: str) -> pd.DataFrame:
+    """Descarga el índice de volatilidad VIX (^VIX) desde Yahoo Finance.
+
+    El VIX es el "índice del miedo": mide la volatilidad implícita del S&P 500.
+    - VIX < 20: mercado calmado, condiciones favorables para invertir
+    - VIX 20-25: volatilidad moderada, precaución
+    - VIX > 25: miedo elevado — suspender nuevas compras (``vix_fear_threshold``)
+    - VIX > 35: pánico — liquidar posiciones (``vix_crisis_threshold``)
+
+    Retorna DataFrame con DatetimeIndex (date) y columna ``vix``.
+    """
+    logger.info("Descargando VIX (^VIX) desde %s hasta %s", start_date, end_date)
+    df = yf.download(
+        tickers="^VIX",
+        start=start_date,
+        end=end_date,
+        auto_adjust=True,
+        progress=False,
+    )
+    if df.empty:
+        logger.warning("VIX no disponible — usando valor por defecto 20.0")
+        dates = pd.date_range(start=start_date, end=end_date, freq="B")
+        return pd.DataFrame({"vix": 20.0}, index=dates)
+
+    if isinstance(df.columns, pd.MultiIndex):
+        df.columns = [col[0].lower() for col in df.columns]
+    else:
+        df.columns = [col.lower() for col in df.columns]
+
+    df.index.name = "date"
+    result = df[["close"]].rename(columns={"close": "vix"})
+
+    logger.info(
+        "VIX descargado: %d filas | media=%.1f | max=%.1f | min=%.1f",
+        len(result),
+        float(result["vix"].mean()),
+        float(result["vix"].max()),
+        float(result["vix"].min()),
+    )
+    return result
+
+
 def validar_datos_mercado(df: pd.DataFrame) -> pd.DataFrame:
     """Valida integridad del DataFrame OHLCV multi-ticker."""
     columnas_requeridas = ["ticker", "open", "high", "low", "close", "volume"]

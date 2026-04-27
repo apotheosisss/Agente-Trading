@@ -59,6 +59,7 @@ def sample_parameters():
             "initial_capital": 10_000,
             "commission": 0.001,
             "rebalance_day": 0,
+            "walk_forward_split": "2023-02-01",
         },
         "risk": {
             "max_positions": 3,
@@ -66,6 +67,10 @@ def sample_parameters():
             "stop_loss_atr_mult": 2.0,
             "stop_loss_pct": 0.03,
             "take_profit_pct": 0.06,
+            "min_entry_score": 1.5,
+            "max_drawdown_circuit": 0.12,
+            "circuit_break_cooldown": 21,
+            "vix_crisis_threshold": 40,
         },
         "llm": {
             "model": "gpt-4o-mini",
@@ -80,3 +85,14 @@ def sample_feature_vector(sample_ohlcv, sample_parameters):
     tech = calcular_indicadores_tecnicos(sample_ohlcv, sample_parameters["technical"])
     sent = calcular_sentimiento(sample_ohlcv)
     return ensamblar_vector_features(tech, sent)
+
+
+@pytest.fixture
+def sample_vix(sample_ohlcv):
+    """VIX sintetico con niveles bajos (15) para que el filtro no se active en tests.
+
+    Los tests de backtesting usan esto para evitar que el filtro VIX liquidre
+    las posiciones simuladas y altere las aserciones de equity.
+    """
+    dates = sample_ohlcv.index.unique()
+    return pd.DataFrame({"vix": 15.0}, index=dates)

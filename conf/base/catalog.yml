@@ -1,4 +1,9 @@
 # ── RAW ──────────────────────────────────────────────
+vix_data:
+  type: pandas.ParquetDataset
+  filepath: data/01_raw/vix.parquet
+  versioned: true
+
 raw_ohlcv:
   type: pandas.ParquetDataset
   filepath: data/01_raw/ohlcv.parquet
@@ -60,6 +65,15 @@ equity_curve:
     layout:
       title: Curva de Equity
 
+# ── WALK-FORWARD ─────────────────────────────────────
+walk_forward_results:
+  type: pandas.CSVDataset
+  filepath: data/08_reporting/walk_forward.csv
+  save_args:
+    encoding: utf-8
+  load_args:
+    encoding: utf-8
+
 # ── BENCHMARK ────────────────────────────────────────
 benchmark_curve:
   type: plotly.PlotlyDataset
@@ -71,6 +85,32 @@ benchmark_curve:
       y: equity
     layout:
       title: Benchmark SPY Buy & Hold
+
+# ── ALPACA ───────────────────────────────────────────
+alpaca_account_state:
+  type: pandas.CSVDataset
+  filepath: data/07_model_output/alpaca_account.csv
+  save_args:
+    encoding: utf-8
+  load_args:
+    encoding: utf-8
+
+alpaca_execution_log:
+  type: pandas.CSVDataset
+  filepath: data/07_model_output/alpaca_orders.csv
+  versioned: true
+  save_args:
+    encoding: utf-8
+  load_args:
+    encoding: utf-8
+
+alpaca_positions:
+  type: pandas.CSVDataset
+  filepath: data/07_model_output/alpaca_positions.csv
+  save_args:
+    encoding: utf-8
+  load_args:
+    encoding: utf-8
 
 # ── EXECUTION ────────────────────────────────────────
 execution_record:
