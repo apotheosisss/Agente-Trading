@@ -110,9 +110,16 @@ def _reporte_riesgo_ticker(ticker: str, grupo: pd.DataFrame) -> str:
 # ── Nodos públicos ────────────────────────────────────────────────────────────
 
 def agente_tecnico(feature_vector: pd.DataFrame) -> str:
-    """Reporte técnico multi-ticker para el último día disponible."""
-    date_str = feature_vector.index.max().strftime("%Y-%m-%d")
-    last_day = feature_vector[feature_vector.index == feature_vector.index.max()]
+    """Reporte técnico multi-ticker para el último día disponible por ticker."""
+    # Cada ticker puede tener distinta última fecha (crypto cotiza fines de semana)
+    last_day = (
+        feature_vector.reset_index()
+        .sort_values("date")
+        .groupby("ticker", sort=False)
+        .last()
+        .reset_index()
+    )
+    date_str = last_day["date"].max().strftime("%Y-%m-%d")
 
     lines = [f"=== ANÁLISIS TÉCNICO — {date_str} ==="]
     for _, row in last_day.iterrows():
@@ -189,7 +196,14 @@ def agente_decision(
         poly_signals: DataFrame con poly_score por ticker (opcional).
                       Si no se provee, funciona igual que antes.
     """
-    last_day = feature_vector[feature_vector.index == feature_vector.index.max()]
+    # Tomar el ultimo dato disponible por ticker (crypto cotiza fines de semana)
+    last_day = (
+        feature_vector.reset_index()
+        .sort_values("date")
+        .groupby("ticker", sort=False)
+        .last()
+        .reset_index()
+    )
 
     rows = []
     for _, row in last_day.iterrows():
