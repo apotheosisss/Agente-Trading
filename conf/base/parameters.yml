@@ -1,11 +1,10 @@
 # ── UNIVERSO DE ACTIVOS ───────────────────────────────
-# Configuracion optima: Tech + Energia Venezuela + AI + Electricidad
-# EV/Urbano excluidos: TSLA/ALB/CHPT destruyen retornos en 2022-2023
+# Configuración óptima: tech + energía Venezuela (mejor resultado en 5 experimentos)
 universe:
   # ── Tech / Growth ─────────────────────────────────────
   - "SPY"     # S&P 500 — referencia / ancla
-  - "QQQ"     # Nasdaq 100 — tecnologia
-  - "NVDA"    # Nvidia — semiconductor / AI lider
+  - "QQQ"     # Nasdaq 100 — tecnología
+  - "NVDA"    # Nvidia — semiconductor / AI líder
   - "META"    # Meta — mega-cap growth
   - "AMZN"    # Amazon — cloud + e-commerce
   - "GOOGL"   # Alphabet — diversificado tech
@@ -13,32 +12,22 @@ universe:
   - "MSFT"    # Microsoft — cloud + AI
   - "BTC-USD" # Bitcoin — alta volatilidad / alto potencial
   - "ETH-USD" # Ethereum — cripto #2
-  - "XLK"     # Tech ETF — exposicion sectorial amplia
+  - "XLK"     # Tech ETF — exposición sectorial amplia
   - "SOXX"    # Semiconductores ETF — ciclo AI
-  # ── Energia / Venezuela ───────────────────────────────
-  - "CVX"     # Chevron — unica empresa EEUU con licencia para operar en Venezuela
-  - "SLB"     # SLB (Schlumberger) — servicios petroleros, reconstruccion infraestructura
-  - "HAL"     # Halliburton — perforacion y completacion, opero en Venezuela pre-sanciones
-  - "VLO"     # Valero — refineria top EEUU, procesa crudo pesado venezolano
-  - "OXY"     # Occidental Petroleum — alta exposicion precio crudo, Latinoamerica
-  - "XLE"     # Energy ETF — exposicion diversificada sector energetico
-  # ── Electricidad / Red electrica ──────────────────────
-  - "NEE"     # NextEra Energy — mayor empresa renovables de EE.UU. (solar + eolico)
-  - "CEG"     # Constellation Energy — nuclear, proveedor para data centers de IA
-  - "VST"     # Vistra — generacion (nuclear + gas), gran beneficiada del boom IA
-  - "PWR"     # Quanta Services — construye red electrica fisica (lineas, subestaciones)
-  # ── Inteligencia Artificial (puras play) ──────────────
-  - "PLTR"    # Palantir — IA para gobierno y empresas, contratos con defensa/salud
-  - "AMD"     # AMD — chips IA competidor de NVDA (GPUs + CPUs data center)
-  - "AVGO"    # Broadcom — chips IA personalizados (TPU Google, MTIA Meta)
-  - "ORCL"    # Oracle — cloud + base de datos IA, contratos con OpenAI
+  # ── Energía / Venezuela ───────────────────────────────
+  - "CVX"     # Chevron — única empresa EEUU con licencia para operar en Venezuela
+  - "SLB"     # SLB (Schlumberger) — servicios petroleros, reconstrucción infraestructura
+  - "HAL"     # Halliburton — perforación y completación, operó en Venezuela pre-sanciones
+  - "VLO"     # Valero — refinería top EEUU, procesa crudo pesado venezolano
+  - "OXY"     # Occidental Petroleum — alta exposición precio crudo, Latinoamérica
+  - "XLE"     # Energy ETF — exposición diversificada sector energético
 
 ticker: "QQQ"          # ticker principal para reportes LLM
 timeframe: "1d"
-start_date: "2019-01-01"   # 6 anos: COVID 2020 + bear 2022 + recovery
+start_date: "2019-01-01"   # 6 años: COVID 2020 + bear 2022 + recovery
 end_date: "2026-04-27"
 
-# ── INDICADORES TECNICOS ──────────────────────────────
+# ── INDICADORES TÉCNICOS ──────────────────────────────
 technical:
   rsi_period: 14
   macd_fast: 12
@@ -50,16 +39,16 @@ technical:
 
 # ── RIESGO ───────────────────────────────────────────
 risk:
-  max_positions: 2              # concentracion en top 2: captura outsized returns de los ganadores
+  max_positions: 2              # concentración en top 2: captura outsized returns de los ganadores
   stop_loss_atr_mult: 3.0       # stops amplios: growth stocks tienen alta volatilidad
-  max_position_pct: 0.50        # 50% por posicion (2 posiciones = 100%)
+  max_position_pct: 0.50        # 50% por posición (2 posiciones = 100%)
   stop_loss_pct: 0.05
   take_profit_pct: 0.10
   # ── Controles de riesgo ────────────────────────────
-  min_entry_score: 1.5          # optimo sweep: mayor amplitud de captura con 26 activos
-  max_drawdown_circuit: 0.25    # circuit breaker solo para crashes rapidos (COVID-like)
-  circuit_break_cooldown: 3     # cooldown minimo: re-entra rapido para no perder recuperaciones
-  vix_crisis_threshold: 40      # VIX > 40 -> liquidar todo (panico extremo)
+  min_entry_score: 2.0          # sólo activos con momentum positivo claro entran
+  max_drawdown_circuit: 0.25    # circuit breaker sólo para crashes rápidos (COVID-like)
+  circuit_break_cooldown: 3     # cooldown mínimo: re-entra rápido para no perder recuperaciones
+  vix_crisis_threshold: 40      # VIX > 40 → liquidar todo (pánico extremo)
 
 # ── AGENTES LLM ──────────────────────────────────────
 llm:
@@ -71,12 +60,11 @@ llm:
 polymarket:
   base_url: "https://gamma-api.polymarket.com"
   min_volume: 5000              # solo mercados con al menos $5k de volumen
-  max_score_contribution: 1.5   # aporte maximo al score final (+-1.5 puntos)
+  max_score_contribution: 1.5   # aporte máximo al score final (±1.5 puntos)
 
 # ── BACKTESTING ──────────────────────────────────────
 backtesting:
   initial_capital: 10000
   commission: 0.001
-  rebalance_interval: 15        # cada 3 semanas — optimo para universo ampliado (26 activos)
   rebalance_day: 0              # 0 = lunes (isoweekday - 1)
-  walk_forward_split: "2022-01-01"  # in-sample hasta aqui, out-of-sample despues
+  walk_forward_split: "2022-01-01"  # in-sample hasta aquí, out-of-sample después
