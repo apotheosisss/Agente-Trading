@@ -33,6 +33,25 @@ wheels = [
 ]
 
 [[package]]
+name = "alpaca-py"
+version = "0.43.3"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "msgpack" },
+    { name = "pandas", version = "2.3.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
+    { name = "pandas", version = "3.0.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
+    { name = "pydantic" },
+    { name = "pytz" },
+    { name = "requests" },
+    { name = "sseclient-py" },
+    { name = "websockets" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/31/40/e0b3470786de2dd917276759d669b3adc6577432323e8535724e71e53c2e/alpaca_py-0.43.3.tar.gz", hash = "sha256:d97e815eb503fe084113b139ed94227913dc4da8025f28460a14d489371bd07d", size = 97985, upload-time = "2026-04-24T18:28:37.068Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/f8/b4/062dbf87910c4a5c0accde3bd073c2fa3f7ac9e66571489ef1a7c0f44531/alpaca_py-0.43.3-py3-none-any.whl", hash = "sha256:0eb36921696bbfc5ea839f083e7822c9ccab062d8d523a888bc4470985f1b3ef", size = 122528, upload-time = "2026-04-24T18:28:38.25Z" },
+]
+
+[[package]]
 name = "annotated-doc"
 version = "0.0.4"
 source = { registry = "https://pypi.org/simple" }
@@ -4370,6 +4389,14 @@ wheels = [
 ]
 
 [[package]]
+name = "sseclient-py"
+version = "1.9.0"
+source = { registry = "https://pypi.org/simple" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/4d/2e/59920f7d66b7f9932a3d83dd0ec53fab001be1e058bf582606fe414a5198/sseclient_py-1.9.0-py3-none-any.whl", hash = "sha256:340062b1587fc2880892811e2ab5b176d98ef3eee98b3672ff3a3ba1e8ed0f6f", size = 8351, upload-time = "2026-01-02T23:39:30.995Z" },
+]
+
+[[package]]
 name = "stack-data"
 version = "0.6.3"
 source = { registry = "https://pypi.org/simple" }
@@ -4610,6 +4637,7 @@ wheels = [
 name = "trading-agent"
 source = { editable = "." }
 dependencies = [
+    { name = "alpaca-py" },
     { name = "ipython" },
     { name = "jupyterlab" },
     { name = "kedro" },
@@ -4647,6 +4675,7 @@ docs = [
 
 [package.metadata]
 requires-dist = [
+    { name = "alpaca-py", specifier = ">=0.20" },
     { name = "docutils", marker = "extra == 'docs'", specifier = "<0.21" },
     { name = "ipykernel", marker = "extra == 'docs'", specifier = ">=5.3,<7.0" },
     { name = "ipython", specifier = ">=8.10" },

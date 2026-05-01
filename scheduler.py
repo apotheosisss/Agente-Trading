@@ -4,14 +4,16 @@ Scheduler diario de señales crypto.
 Crypto opera 24/7 — no hay restriccion de dias de mercado.
 
 Uso:
-    uv run python scheduler.py            # ejecutar hoy
-    uv run python scheduler.py --dry-run  # mostrar que haria sin ejecutar
+    uv run python scheduler.py               # señales + paper trading Alpaca
+    uv run python scheduler.py --dry-run     # mostrar que haria sin ejecutar
+    uv run python scheduler.py --no-alpaca   # solo señales, sin enviar ordenes
 
 El script:
   1. Descarga datos recientes (ultimos 400 dias)
   2. Ejecuta el pipeline de señales crypto (sin backtesting — ~30s)
-  3. Imprime las recomendaciones del dia
-  4. Guarda un log en data/08_reporting/daily_log/
+  3. Ejecuta el pipeline de Alpaca (paper trading)
+  4. Imprime las recomendaciones del dia
+  5. Guarda un log en data/08_reporting/daily_log/
 """
 import argparse
 import io
@@ -25,7 +27,8 @@ from pathlib import Path
 # Forzar UTF-8 en stdout para evitar errores de encoding en Windows
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
 
-LOG_DIR = Path("data/08_reporting/daily_log")
+LOG_DIR     = Path("data/08_reporting/daily_log")
+ALPACA_LOG  = Path("data/07_model_output/alpaca_orders.csv")
 
 
 def find_latest_signal() -> Path | None:
@@ -99,12 +102,10 @@ def format_report(signal_path: Path, today_str: str) -> str:
     return "\n".join(lines)
 
 
-def run_pipeline(start_date: str, end_date: str, dry_run: bool) -> bool:
-    cmd = [
-        "uv", "run", "kedro", "run",
-        "--pipeline=signals",
-        f"--params=start_date={start_date},end_date={end_date}",
-    ]
+def run_pipeline(pipeline: str, dry_run: bool, extra_params: str = "") -> bool:
+    cmd = ["uv", "run", "kedro", "run", f"--pipeline={pipeline}"]
+    if extra_params:
+        cmd.append(f"--params={extra_params}")
     print(f"  Ejecutando: {' '.join(cmd)}")
     if dry_run:
         print("  [DRY RUN] Pipeline no ejecutado.")
@@ -113,7 +114,7 @@ def run_pipeline(start_date: str, end_date: str, dry_run: bool) -> bool:
     result = subprocess.run(cmd, capture_output=True, text=True)
     ok = "Pipeline execution completed" in result.stdout + result.stderr
     if not ok:
-        print("  ERROR: Pipeline fallo.")
+        print(f"  ERROR: Pipeline '{pipeline}' fallo.")
         print(result.stderr[-1500:])
     return ok
 
@@ -125,9 +126,18 @@ def save_log(report: str, today_str: str) -> Path:
     return log_file
 
 
+def alpaca_credentials_configured() -> bool:
+    cred_path = Path("conf/local/credentials.yml")
+    if not cred_path.exists():
+        return False
+    content = cred_path.read_text(encoding="utf-8")
+    return "PONER_API_KEY_AQUI" not in content
+
+
 def main():
     parser = argparse.ArgumentParser(description="Scheduler diario crypto")
     parser.add_argument("--dry-run", action="store_true", help="Mostrar acciones sin ejecutar pipeline")
+    parser.add_argument("--no-alpaca", action="store_true", help="Omitir pipeline de Alpaca")
     args = parser.parse_args()
 
     today = datetime.now()
@@ -141,7 +151,12 @@ def main():
     start_date = (today - timedelta(days=400)).strftime("%Y-%m-%d")
     print(f"  Periodo de datos: {start_date} a {end_date}")
 
-    ok = run_pipeline(start_date, end_date, dry_run=args.dry_run)
+    # 1. Señales
+    ok = run_pipeline(
+        pipeline="signals",
+        dry_run=args.dry_run,
+        extra_params=f"start_date={start_date},end_date={end_date}",
+    )
     if not ok:
         sys.exit(1)
 
@@ -159,6 +174,36 @@ def main():
 
     log_file = save_log(report, today_str)
     print(f"\n  Log guardado en: {log_file}")
+
+    # 2. Notificacion de señales
+    try:
+        import notifier
+        import pandas as pd
+        sig = pd.read_json(signal_path)
+        notifier.notify_signals(
+            strategy="Crypto",
+            report=report,
+            n_buy=int((sig["signal"] == "BUY").sum()),
+            n_sell=int((sig["signal"] == "SELL").sum()),
+        )
+    except Exception as e:
+        print(f"  [Telegram] {e}")
+
+    # 3. Alpaca paper trading (si esta configurado)
+    if args.no_alpaca:
+        print("  [--no-alpaca] Pipeline de Alpaca omitido.")
+    elif not alpaca_credentials_configured():
+        print("\n  [Alpaca] Credenciales no configuradas — omitiendo.")
+        print("  Configura conf/local/credentials.yml para activar paper trading.")
+    else:
+        print("\n  Ejecutando pipeline Alpaca (paper trading)...")
+        ok_alpaca = run_pipeline(pipeline="alpaca", dry_run=False)
+        if ok_alpaca:
+            try:
+                import notifier
+                notifier.notify_alpaca_orders(ALPACA_LOG)
+            except Exception as e:
+                print(f"  [Telegram Alpaca] {e}")
 
 
 if __name__ == "__main__":

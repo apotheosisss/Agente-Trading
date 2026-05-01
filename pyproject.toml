@@ -20,6 +20,7 @@ dependencies = [
     "openai>=1.0",
     "kedro-datasets[pandas,plotly]>=9.0",
     "kedro-viz>=9.0",
+    "alpaca-py>=0.20",
 ]
 
 [project.scripts]
