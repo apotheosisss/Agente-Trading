@@ -66,4 +66,33 @@ jobs:
 
       - name: Send Telegram notification
         if: always()
-        run: uv run python notifier.py || true
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          # Leer señales y notificar via Telegram
+          uv run python - <<'PYEOF' || true
+          import sys, json
+          from pathlib import Path
+          sys.path.insert(0, "src")
+          import notifier
+
+          # Buscar ultimo archivo de señales
+          signal_dir = Path("data/07_model_output")
+          files = sorted(signal_dir.rglob("signal.json"), key=lambda p: p.stat().st_mtime)
+          if not files:
+              notifier.send("Trading Agent Crypto: pipeline ejecutado (sin señales encontradas)")
+          else:
+              import pandas as pd
+              df = pd.read_json(files[-1])
+              n_buy = int((df["signal"] == "BUY").sum())
+              n_sell = int((df["signal"] == "SELL").sum())
+              n_hold = int((df["signal"] == "HOLD").sum())
+              top = df[df["signal"] == "BUY"]["ticker"].tolist()[:3]
+              msg = (
+                  f"Crypto Signals\n"
+                  f"BUY={n_buy} | HOLD={n_hold} | SELL={n_sell}\n"
+                  f"Top picks: {', '.join(top) if top else 'ninguno'}"
+              )
+              notifier.send(msg)
+          PYEOF
