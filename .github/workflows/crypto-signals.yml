@@ -64,6 +64,9 @@ jobs:
           uv run kedro run --pipeline=signals \
             --params="start_date=$START,end_date=$END"
 
+      - name: Execute Alpaca orders (paper trading)
+        run: uv run kedro run --pipeline=alpaca
+
       - name: Send Telegram notification
         if: always()
         env:
