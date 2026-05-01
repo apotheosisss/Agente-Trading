@@ -60,15 +60,12 @@ jobs:
           print("credentials.yml creado correctamente")
           PYEOF
 
-      - name: Run signals pipeline
+      - name: Run signals + Alpaca pipelines
         run: |
           END=$(date +%Y-%m-%d)
           START=$(date -d "400 days ago" +%Y-%m-%d)
-          uv run kedro run --pipeline=signals \
-            --params="start_date=$START,end_date=$END"
-
-      - name: Execute Alpaca orders (paper trading)
-        run: uv run kedro run --pipeline=alpaca
+          uv run kedro run --pipeline=signals --params="start_date=$START,end_date=$END"
+          uv run kedro run --pipeline=alpaca
 
       - name: Send Telegram notification
         if: always()
