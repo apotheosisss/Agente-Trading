@@ -2,7 +2,7 @@ name: Polymarket Signals (Mon-Fri 17:00 EST)
 
 on:
   schedule:
-    - cron: "0 22 * * 1-5"   # 22:00 UTC = 17:00 EST, lunes a viernes
+    - cron: "20 21 * * 1-5"  # 21:20 UTC = 16:20 EST, lunes a viernes (evita congestion hora en punto)
   workflow_dispatch:           # permite ejecutar manualmente desde GitHub
 
 env:
