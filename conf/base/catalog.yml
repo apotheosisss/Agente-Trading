@@ -40,6 +40,11 @@ trading_signal:
   filepath: data/07_model_output/signal.json
   versioned: true
 
+verified_signal:
+  type: pandas.JSONDataset
+  filepath: data/07_model_output/verified_signal.json
+  versioned: true
+
 # ── BACKTESTING INTERMEDIATE ─────────────────────────
 backtest_portfolio:
   type: pandas.ParquetDataset
