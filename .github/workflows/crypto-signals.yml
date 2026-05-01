@@ -27,6 +27,9 @@ jobs:
       - name: Install dependencies
         run: uv sync
 
+      - name: Install TradingAgents
+        run: uv run pip install tradingagents || echo "TradingAgents no disponible — filtro de confirmacion desactivado"
+
       - name: Create credentials.yml from secrets
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
