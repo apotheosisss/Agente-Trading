@@ -5,6 +5,9 @@ on:
     - cron: "0 22 * * 1-5"   # 22:00 UTC = 17:00 EST, lunes a viernes
   workflow_dispatch:           # permite ejecutar manualmente desde GitHub
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
   signals:
     runs-on: ubuntu-latest
