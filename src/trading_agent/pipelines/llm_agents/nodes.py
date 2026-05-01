@@ -257,8 +257,23 @@ def agente_decision(
     # Enriquecimiento LLM opcional
     try:
         from openai import OpenAI
+        from pathlib import Path
+        import yaml as _yaml
 
-        client = OpenAI()
+        # Cargar credenciales para OpenRouter/OpenAI
+        _cred_path = Path("conf/local/credentials.yml")
+        _openai_cfg = {}
+        if _cred_path.exists():
+            with open(_cred_path, encoding="utf-8") as _f:
+                _openai_cfg = (_yaml.safe_load(_f) or {}).get("openai", {})
+
+        _api_key = _openai_cfg.get("api_key") or None
+        _base_url = "https://openrouter.ai/api/v1" if (
+            _api_key and _api_key.startswith("sk-or-")
+        ) else None
+
+        client = OpenAI(api_key=_api_key, base_url=_base_url) if _api_key else OpenAI()
+
         top_tickers = signal_df[signal_df["signal"] == "BUY"]["ticker"].tolist()[:3]
         if top_tickers:
             poly_context = f"\n{poly_report}" if poly_report else ""
@@ -269,7 +284,7 @@ def agente_decision(
                 f"En máximo 80 palabras, justifica brevemente estas selecciones."
             )
             response = client.chat.completions.create(
-                model=parameters.get("model", "gpt-4o-mini"),
+                model=parameters.get("model", "openai/gpt-5-nano"),
                 messages=[{"role": "user", "content": prompt}],
                 temperature=parameters.get("temperature", 0.1),
                 max_tokens=120,
@@ -292,3 +307,131 @@ def agente_decision(
         "activo" if has_poly else "inactivo",
     )
     return signal_df
+
+
+def filtrar_signals_tradingagents(
+    signal_df: pd.DataFrame,
+    parameters: dict,
+) -> pd.DataFrame:
+    """Filtra señales BUY de alto score a través de TradingAgents para confirmación.
+
+    Flujo:
+    1. Toma señales BUY con confidence >= confidence_threshold
+    2. Las corre a través de TradingAgents graph (Anthropic + multi-agent)
+    3. Solo mantiene señales donde AMBOS sistemas coinciden (BUY + Buy/Overweight)
+    4. Retorna DataFrame con las señales confirmadas
+
+    Args:
+        signal_df: Señales generadas por agente_decision
+        parameters: Parametros del proyecto (usa seccion 'llm.tradingagents')
+
+    Returns:
+        DataFrame filtrado con solo las señales confirmadas por TradingAgents
+    """
+    try:
+        from tradingagents.graph import TradingAgentsGraph
+        from pathlib import Path
+        import yaml
+    except ImportError as e:
+        logger.warning("TradingAgents no disponible (%s) — saltando filtro", type(e).__name__)
+        return signal_df
+
+    # Extraer parámetros
+    ta_cfg = parameters.get("llm", {}).get("tradingagents", {})
+    confidence_threshold = float(ta_cfg.get("confidence_threshold", 0.60))
+    top_n = int(ta_cfg.get("top_n_signals", 3))
+    enabled = ta_cfg.get("enabled", False)
+
+    if not enabled:
+        logger.info("TradingAgents filtro deshabilitado (enabled=false)")
+        return signal_df
+
+    # Filtrar top N BUY signals de alto score
+    buy_signals = signal_df[
+        (signal_df["signal"] == "BUY") &
+        (signal_df["confidence"] >= confidence_threshold)
+    ].head(top_n).copy()
+
+    if buy_signals.empty:
+        logger.info("Sin señales BUY para confirmar con TradingAgents")
+        return signal_df
+
+    # Cargar API key de OpenAI desde credenciales
+    try:
+        cred_path = Path("conf/local/credentials.yml")
+        if cred_path.exists():
+            with open(cred_path, encoding="utf-8") as f:
+                creds = yaml.safe_load(f) or {}
+                openai_key = creds.get("openai", {}).get("api_key")
+                if openai_key:
+                    import os
+                    os.environ["OPENAI_API_KEY"] = openai_key
+    except Exception as exc:
+        logger.warning("Error cargando credenciales OpenAI: %s", exc)
+        return signal_df
+
+    # Crear instancia de TradingAgents con config Anthropic
+    try:
+        from datetime import datetime
+        today = datetime.now().strftime("%Y-%m-%d")
+
+        graph = TradingAgentsGraph(
+            selected_analysts=["market", "news", "fundamentals"],
+            debug=False,
+            config=None,  # Usa DEFAULT_CONFIG que ya está configurado para Anthropic
+        )
+
+        confirmed = []
+        for _, row in buy_signals.iterrows():
+            ticker = str(row["ticker"])
+            try:
+                logger.info("TradingAgents: analizando %s", ticker)
+                final_state, ta_signal = graph.propagate(ticker, today)
+
+                # ta_signal es uno de: "Buy", "Overweight", "Hold", "Underweight", "Sell"
+                is_bullish = ta_signal in ["Buy", "Overweight"]
+
+                if is_bullish:
+                    row_dict = row.to_dict()
+                    row_dict["tradingagents_signal"] = ta_signal
+                    row_dict["confirmed"] = True
+                    confirmed.append(row_dict)
+                    logger.info(
+                        "✓ %s confirmado por TradingAgents (%s)",
+                        ticker, ta_signal,
+                    )
+                else:
+                    logger.info(
+                        "✗ %s rechazado por TradingAgents (%s vs BUY)",
+                        ticker, ta_signal,
+                    )
+
+            except Exception as exc:
+                logger.error("Error ejecutando TradingAgents para %s: %s", ticker, exc)
+                # En caso de error, mantener la señal original (fail-safe)
+                row_dict = row.to_dict()
+                row_dict["tradingagents_signal"] = "ERROR"
+                row_dict["confirmed"] = False
+                confirmed.append(row_dict)
+
+        # Retornar original si ninguna se confirmó, o retornar solo confirmadas
+        if confirmed:
+            confirmed_df = pd.DataFrame(confirmed)
+            logger.info(
+                "TradingAgents: %d/%d señales confirmadas",
+                len(confirmed_df),
+                len(buy_signals),
+            )
+            # Reordenar columnas para mantener compatibilidad
+            cols_orig = signal_df.columns.tolist()
+            for col in ["tradingagents_signal", "confirmed"]:
+                if col not in cols_orig:
+                    cols_orig.append(col)
+            return confirmed_df[cols_orig]
+        else:
+            logger.info("TradingAgents: ninguna señal fue confirmada")
+            return signal_df
+
+    except Exception as exc:
+        logger.error("Error inicializando TradingAgents: %s", exc)
+        return signal_df

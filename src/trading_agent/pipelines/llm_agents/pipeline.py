@@ -2,7 +2,13 @@
 
 from kedro.pipeline import Pipeline, node
 
-from .nodes import agente_decision, agente_riesgo, agente_sentimiento, agente_tecnico
+from .nodes import (
+    agente_decision,
+    agente_riesgo,
+    agente_sentimiento,
+    agente_tecnico,
+    filtrar_signals_tradingagents,
+)
 
 
 def create_pipeline(**kwargs) -> Pipeline:
@@ -40,6 +46,15 @@ def create_pipeline(**kwargs) -> Pipeline:
                 ],
                 outputs="trading_signal",
                 name="nodo_agente_decision",
+            ),
+            node(
+                func=filtrar_signals_tradingagents,
+                inputs=[
+                    "trading_signal",
+                    "params:llm",
+                ],
+                outputs="verified_signal",
+                name="nodo_filtro_tradingagents",
             ),
         ]
     )

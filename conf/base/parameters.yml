@@ -52,9 +52,16 @@ risk:
 
 # ── AGENTES LLM ──────────────────────────────────────
 llm:
-  model: "gpt-4o-mini"
+  model: "openai/gpt-5-nano"
   temperature: 0.1
   confidence_threshold: 0.65
+  # ── TradingAgents (Multi-agent confirmation filter) ─
+  tradingagents:
+    enabled: true               # filtro de confirmación activo via OpenRouter
+    confidence_threshold: 0.60  # solo filtra BUY signals con confidence >= 60%
+    top_n_signals: 3            # máximo N signals a analizar por TradingAgents
+    # Nota: Requiere ANTHROPIC_API_KEY en credentials.yml
+    # Costo estimado: ~$0.30/mes (1 ticker = ~0.01 llamadas a API)
 
 # ── POLYMARKET ───────────────────────────────────────
 polymarket:

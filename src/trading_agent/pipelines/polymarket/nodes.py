@@ -29,7 +29,62 @@ POLYMARKET_API = "https://gamma-api.polymarket.com"
 # tickers:   lista de activos que afecta. None = todos.
 
 _KEYWORD_CATEGORIES: list[dict[str, Any]] = [
-    # Macro global
+    # ── Cripto ────────────────────────────────────────────────────────────────
+    {
+        "name": "bitcoin_target",
+        # "Will Bitcoin hit $150k / $200k / $300k..."
+        "keywords": ["bitcoin hit $", "btc hit $", "bitcoin reach $", "bitcoin above $"],
+        "direction": "bullish",
+        "tickers": ["BTC-USD", "ETH-USD"],
+        "weight": 1.2,
+    },
+    {
+        "name": "bitcoin_crash",
+        "keywords": ["bitcoin below $", "bitcoin crash", "bitcoin drop", "btc below $"],
+        "direction": "bearish",
+        "tickers": ["BTC-USD", "ETH-USD"],
+        "weight": 1.0,
+    },
+    {
+        "name": "crypto_etf",
+        "keywords": ["bitcoin etf", "ethereum etf", "crypto etf", "spot btc"],
+        "direction": "bullish",
+        "tickers": ["BTC-USD", "ETH-USD"],
+        "weight": 1.0,
+    },
+    # ── Geopolítica (riesgo macro) ─────────────────────────────────────────────
+    {
+        "name": "ukraine_ceasefire",
+        # Resolución del conflicto → risk-on, bullish para mercados
+        "keywords": ["ceasefire", "ukraine peace", "russia ukraine deal"],
+        "direction": "bullish",
+        "tickers": None,
+        "weight": 0.8,
+    },
+    {
+        "name": "taiwan_invasion",
+        # Escalada geopolítica → risk-off, muy bearish (tech supply chain)
+        "keywords": ["china invade taiwan", "taiwan invasion", "china taiwan war"],
+        "direction": "bearish",
+        "tickers": ["AAPL", "NVDA", "TSM", "XLK", "QQQ", "SPY"],
+        "weight": 1.2,
+    },
+    {
+        "name": "us_war",
+        "keywords": ["world war", "us military conflict", "us war"],
+        "direction": "bearish",
+        "tickers": None,
+        "weight": 1.0,
+    },
+    # ── Política EEUU (incertidumbre = bearish) ────────────────────────────────
+    {
+        "name": "trump_impeachment",
+        "keywords": ["trump impeached", "trump removed", "trump resign"],
+        "direction": "bearish",
+        "tickers": None,
+        "weight": 0.7,
+    },
+    # ── Macro económico (si reaparecen estos mercados) ─────────────────────────
     {
         "name": "fed_cut",
         "keywords": ["rate cut", "fed cut", "federal reserve cut", "fed pivot"],
@@ -39,68 +94,16 @@ _KEYWORD_CATEGORIES: list[dict[str, Any]] = [
     },
     {
         "name": "recession",
-        "keywords": ["recession", "us recession"],
+        "keywords": ["recession", "us recession", "gdp contraction"],
         "direction": "bearish",
         "tickers": None,
         "weight": 1.0,
     },
     {
-        "name": "fed_hike",
-        "keywords": ["rate hike", "rate increase", "fed hike"],
+        "name": "trade_war",
+        "keywords": ["tariff", "trade war", "trade deal", "china tariff"],
         "direction": "bearish",
-        "tickers": None,
-        "weight": 0.8,
-    },
-    {
-        "name": "soft_landing",
-        "keywords": ["soft landing", "no recession", "economic growth"],
-        "direction": "bullish",
-        "tickers": None,
-        "weight": 0.8,
-    },
-    # Cripto
-    {
-        "name": "crypto_bull",
-        "keywords": ["bitcoin", "btc", "crypto bull"],
-        "direction": "bullish",
-        "tickers": ["BTC-USD", "ETH-USD"],
-        "weight": 1.2,
-    },
-    {
-        "name": "crypto_regulation",
-        "keywords": ["crypto ban", "bitcoin regulation", "sec crypto"],
-        "direction": "bearish",
-        "tickers": ["BTC-USD", "ETH-USD"],
-        "weight": 1.0,
-    },
-    {
-        "name": "eth_bull",
-        "keywords": ["ethereum", "eth price", "ethereum etf"],
-        "direction": "bullish",
-        "tickers": ["ETH-USD"],
-        "weight": 1.0,
-    },
-    # Tech / AI
-    {
-        "name": "ai_boom",
-        "keywords": ["nvidia", "ai chip", "artificial intelligence", "semiconductor boom"],
-        "direction": "bullish",
-        "tickers": ["NVDA", "XLK", "SOXX", "QQQ"],
-        "weight": 1.2,
-    },
-    {
-        "name": "tech_regulation",
-        "keywords": ["big tech regulation", "antitrust tech", "meta fine", "google fine"],
-        "direction": "bearish",
-        "tickers": ["META", "GOOGL", "AAPL", "MSFT", "AMZN"],
-        "weight": 0.8,
-    },
-    # Mercado general
-    {
-        "name": "sp500_up",
-        "keywords": ["s&p 500 higher", "nasdaq higher", "stock market up"],
-        "direction": "bullish",
-        "tickers": ["SPY", "QQQ"],
+        "tickers": ["AAPL", "NVDA", "XLK", "SPY", "QQQ"],
         "weight": 0.9,
     },
 ]
@@ -118,8 +121,8 @@ def _fetch_markets(base_url: str, min_volume: float) -> list[dict]:
 
         resp = requests.get(
             f"{base_url}/markets",
-            params={"active": "true", "closed": "false", "limit": 500},
-            timeout=10,
+            params={"active": "true", "closed": "false", "limit": 1000},
+            timeout=15,
         )
         resp.raise_for_status()
         markets = resp.json()
@@ -144,12 +147,18 @@ def _fetch_markets(base_url: str, min_volume: float) -> list[dict]:
 
 
 def _parse_yes_price(market: dict) -> float | None:
-    """Extrae el precio de YES (probabilidad) de un mercado binario."""
+    """Extrae el precio de YES (probabilidad) de un mercado binario.
+
+    outcomePrices puede llegar como lista o como string JSON serializado.
+    """
+    import json as _json
     try:
         prices = market.get("outcomePrices", [])
+        if isinstance(prices, str):
+            prices = _json.loads(prices)
         if prices:
             return float(prices[0])
-    except (ValueError, TypeError):
+    except (ValueError, TypeError, _json.JSONDecodeError):
         pass
     return None
 

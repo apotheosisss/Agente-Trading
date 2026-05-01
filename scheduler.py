@@ -216,6 +216,20 @@ def main():
     log_file = save_log(report, today_str)
     print(f"\n  Log guardado en: {log_file}")
 
+    # Notificacion Telegram
+    try:
+        import pandas as pd
+        import notifier
+        sig = pd.read_json(signal_path)
+        notifier.notify_signals(
+            strategy="Polymarket",
+            report=report,
+            n_buy=int((sig["signal"] == "BUY").sum()),
+            n_sell=int((sig["signal"] == "SELL").sum()),
+        )
+    except Exception as e:
+        print(f"  [Telegram] {e}")
+
 
 if __name__ == "__main__":
     main()
