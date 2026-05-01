@@ -20,7 +20,6 @@ dependencies = [
     "openai>=1.0",
     "kedro-datasets[pandas,plotly]>=9.0",
     "kedro-viz>=9.0",
-    "tradingagents",
 ]
 
 [project.scripts]
@@ -94,5 +93,3 @@ ignore = ["E501"]  # Ruff format takes care of line-too-long
 [tool.kedro_telemetry]
 project_id = "72409c7749cd47c59c1f80e7e1e1fc13"
 
-[tool.uv.sources]
-tradingagents = { path = "../../../../TradingAgents-0.2.4" }

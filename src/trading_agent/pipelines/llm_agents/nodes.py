@@ -370,15 +370,44 @@ def filtrar_signals_tradingagents(
         logger.warning("Error cargando credenciales OpenAI: %s", exc)
         return signal_df
 
-    # Crear instancia de TradingAgents con config Anthropic
+    # Crear instancia de TradingAgents con config explícita (OpenRouter + gpt-5-nano)
     try:
         from datetime import datetime
         today = datetime.now().strftime("%Y-%m-%d")
 
+        import os as _os
+        _home = _os.path.join(_os.path.expanduser("~"), ".tradingagents")
+        ta_config = {
+            "project_dir": _os.path.abspath("."),
+            "results_dir": _os.path.join(_home, "logs"),
+            "data_cache_dir": _os.path.join(_home, "cache"),
+            "memory_log_path": _os.path.join(_home, "memory", "trading_memory.md"),
+            "memory_log_max_entries": None,
+            "llm_provider": "openai",
+            "deep_think_llm": "openai/gpt-5-nano",
+            "quick_think_llm": "openai/gpt-5-nano",
+            "backend_url": "https://openrouter.ai/api/v1",
+            "anthropic_effort": None,
+            "openai_reasoning_effort": None,
+            "google_thinking_level": None,
+            "checkpoint_enabled": False,
+            "output_language": "English",
+            "max_debate_rounds": 1,
+            "max_risk_discuss_rounds": 1,
+            "max_recur_limit": 100,
+            "data_vendors": {
+                "core_stock_apis": "yfinance",
+                "technical_indicators": "yfinance",
+                "fundamental_data": "yfinance",
+                "news_data": "yfinance",
+            },
+            "tool_vendors": {},
+        }
+
         graph = TradingAgentsGraph(
             selected_analysts=["market", "news", "fundamentals"],
             debug=False,
-            config=None,  # Usa DEFAULT_CONFIG que ya está configurado para Anthropic
+            config=ta_config,
         )
 
         confirmed = []
