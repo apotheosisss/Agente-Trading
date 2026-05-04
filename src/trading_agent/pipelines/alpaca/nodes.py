@@ -169,12 +169,31 @@ def ejecutar_ordenes_alpaca(
         client, paper = _get_alpaca_client()
         mode = "paper" if paper else "live"
 
+        # Obtener posiciones abiertas para evitar duplicar compras
+        open_positions = client.get_all_positions()
+        held_symbols = {
+            str(p.symbol).replace("/", "-")  # normalizar a formato yfinance
+            for p in open_positions
+        }
+        logger.info("Posiciones actuales en cartera: %s", held_symbols or "ninguna")
+
         for _, row in buy_signals.iterrows():
             ticker = str(row["ticker"])
             # Alpaca usa "BTC/USD" para cripto (no "BTC-USD" de yfinance)
             # Para acciones (SPY, COIN) el símbolo se mantiene igual
             alpaca_symbol = ticker.replace("-USD", "/USD") if "-USD" in ticker else ticker
             notional = round(alloc_per_position, 2)
+
+            # Saltar si ya tenemos posición abierta en este activo
+            if ticker in held_symbols:
+                logger.info("Ya existe posición en %s — orden omitida para evitar acumulación.", ticker)
+                records.append({
+                    "timestamp": ts, "ticker": ticker, "side": "BUY",
+                    "qty": 0.0, "notional_usd": 0.0,
+                    "status": "skipped", "message": "Posición ya abierta",
+                    "mode": mode,
+                })
+                continue
 
             if notional <= 0:
                 records.append({
