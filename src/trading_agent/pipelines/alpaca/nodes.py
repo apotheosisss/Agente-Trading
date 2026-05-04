@@ -134,11 +134,9 @@ def ejecutar_ordenes_alpaca(
     confidence_threshold = float(parameters["llm"]["confidence_threshold"])
     max_positions = int(parameters["risk"]["max_positions"])
 
-    # Solo activos cripto (tickers con "-USD" como BTC-USD, ETH-USD)
-    is_crypto = signal_df["ticker"].str.contains("-USD", na=False)
+    # Todos los activos del universo (cripto y acciones como SPY, COIN)
     buy_signals = signal_df[
-        is_crypto
-        & (signal_df["signal"] == "BUY")
+        (signal_df["signal"] == "BUY")
         & (signal_df["confidence"] >= confidence_threshold)
     ].copy()
 
@@ -174,7 +172,8 @@ def ejecutar_ordenes_alpaca(
         for _, row in buy_signals.iterrows():
             ticker = str(row["ticker"])
             # Alpaca usa "BTC/USD" para cripto (no "BTC-USD" de yfinance)
-            alpaca_symbol = ticker.replace("-", "/")
+            # Para acciones (SPY, COIN) el símbolo se mantiene igual
+            alpaca_symbol = ticker.replace("-USD", "/USD") if "-USD" in ticker else ticker
             notional = round(alloc_per_position, 2)
 
             if notional <= 0:
