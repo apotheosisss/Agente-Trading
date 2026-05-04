@@ -35,11 +35,18 @@ jobs:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          ALPACA_API_KEY: ${{ secrets.ALPACA_API_KEY }}
+          ALPACA_SECRET_KEY: ${{ secrets.ALPACA_SECRET_KEY }}
         run: |
           mkdir -p conf/local
           python - <<'PYEOF'
           import os, yaml
           creds = {
+              "alpaca": {
+                  "api_key": os.environ["ALPACA_API_KEY"],
+                  "secret_key": os.environ["ALPACA_SECRET_KEY"],
+                  "paper_trading": True,
+              },
               "telegram": {
                   "bot_token": os.environ["TELEGRAM_BOT_TOKEN"],
                   "chat_id": os.environ["TELEGRAM_CHAT_ID"],
@@ -53,12 +60,12 @@ jobs:
           print("credentials.yml creado correctamente")
           PYEOF
 
-      - name: Run signals pipeline
+      - name: Run signals + Alpaca pipelines
         run: |
           END=$(date +%Y-%m-%d)
           START=$(date -d "400 days ago" +%Y-%m-%d)
-          uv run kedro run --pipeline=signals \
-            --params="start_date=$START,end_date=$END"
+          uv run kedro run --pipeline=signals --params="start_date=$START,end_date=$END"
+          uv run kedro run --pipeline=alpaca
 
       - name: Send Telegram notification
         if: always()
