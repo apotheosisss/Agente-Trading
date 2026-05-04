@@ -34,7 +34,7 @@ def create_pipeline(**kwargs) -> Pipeline:
             node(
                 func=ejecutar_ordenes_alpaca,
                 inputs=[
-                    "trading_signal",
+                    "verified_signal",
                     "alpaca_account_state",
                     "parameters",
                     "credentials:alpaca",
