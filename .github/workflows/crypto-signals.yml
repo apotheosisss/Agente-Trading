@@ -2,7 +2,7 @@ name: Crypto Signals (Daily 08:00 EST)
 
 on:
   schedule:
-    - cron: "0 13 * * *"    # 13:00 UTC = 08:00 EST, todos los dias
+    - cron: "15 13 * * *"   # 13:15 UTC = 08:15 EST, todos los dias (evita congestion hora en punto)
   workflow_dispatch:          # permite ejecutar manualmente desde GitHub
 
 env:
