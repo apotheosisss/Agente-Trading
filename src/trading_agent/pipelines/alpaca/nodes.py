@@ -20,10 +20,8 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timezone
-from pathlib import Path
 
 import pandas as pd
-import yaml
 
 logger = logging.getLogger(__name__)
 
@@ -31,17 +29,11 @@ logger = logging.getLogger(__name__)
 MAX_ORDER_USD = 5_000      # Tamaño máximo por orden ($)
 MAX_PORTFOLIO_PCT = 0.15   # Máximo 15% del portfolio en un solo activo
 MIN_CASH_RESERVE = 0.05    # Mantener mínimo 5% del portfolio en cash
+ALPACA_PAPER_URL = "https://paper-api.alpaca.markets"
+ALPACA_LIVE_URL = "https://api.alpaca.markets"
 
 
-def _load_credentials() -> dict:
-    cred_path = Path("conf/local/credentials.yml")
-    if not cred_path.exists():
-        return {}
-    with open(cred_path, encoding="utf-8") as f:
-        return yaml.safe_load(f) or {}
-
-
-def _get_alpaca_client(credentials: dict | None = None):
+def _get_alpaca_client(credentials: dict):
     """Instancia el cliente de Alpaca.  Siempre usa paper a menos que se indique explícitamente."""
     try:
         from alpaca.trading.client import TradingClient
@@ -50,8 +42,6 @@ def _get_alpaca_client(credentials: dict | None = None):
             "Instala alpaca-py: pip install alpaca-py"
         ) from exc
 
-    if credentials is None:
-        credentials = _load_credentials()
     cfg = credentials.get("alpaca", {})
     api_key = cfg.get("api_key", "")
     secret_key = cfg.get("secret_key", "")
@@ -73,14 +63,14 @@ def _get_alpaca_client(credentials: dict | None = None):
     return client, paper
 
 
-def verificar_cuenta_alpaca() -> pd.DataFrame:
+def verificar_cuenta_alpaca(credentials: dict) -> pd.DataFrame:
     """Obtiene el estado de la cuenta Alpaca (equity, cash, posiciones abiertas).
 
     Retorna un DataFrame de una fila con el estado de la cuenta.
     """
     ts = datetime.now(timezone.utc).isoformat()
     try:
-        client, paper = _get_alpaca_client()
+        client, paper = _get_alpaca_client(credentials)
         account = client.get_account()
         equity = float(account.equity)
         cash = float(account.cash)
@@ -118,6 +108,7 @@ def ejecutar_ordenes_alpaca(
     signal_df: pd.DataFrame,
     account_state: pd.DataFrame,
     parameters: dict,
+    credentials: dict,
 ) -> pd.DataFrame:
     """Ejecuta órdenes de mercado en Alpaca para las señales BUY aprobadas.
 
@@ -134,7 +125,6 @@ def ejecutar_ordenes_alpaca(
     confidence_threshold = float(parameters["llm"]["confidence_threshold"])
     max_positions = int(parameters["risk"]["max_positions"])
 
-    # Todos los activos del universo (cripto y acciones como SPY, COIN)
     buy_signals = signal_df[
         (signal_df["signal"] == "BUY")
         & (signal_df["confidence"] >= confidence_threshold)
@@ -166,13 +156,13 @@ def ejecutar_ordenes_alpaca(
         from alpaca.trading.requests import MarketOrderRequest
         from alpaca.trading.enums import OrderSide, TimeInForce
 
-        client, paper = _get_alpaca_client()
+        client, paper = _get_alpaca_client(credentials)
         mode = "paper" if paper else "live"
 
         # Obtener posiciones abiertas para evitar duplicar compras
         open_positions = client.get_all_positions()
         held_symbols = {
-            str(p.symbol).replace("/", "-")  # normalizar a formato yfinance
+            str(p.symbol).replace("/", "-")
             for p in open_positions
         }
         logger.info("Posiciones actuales en cartera: %s", held_symbols or "ninguna")
@@ -180,13 +170,12 @@ def ejecutar_ordenes_alpaca(
         for _, row in buy_signals.iterrows():
             ticker = str(row["ticker"])
             # Alpaca usa "BTC/USD" para cripto (no "BTC-USD" de yfinance)
-            # Para acciones (SPY, COIN) el símbolo se mantiene igual
-            alpaca_symbol = ticker.replace("-USD", "/USD") if "-USD" in ticker else ticker
+            alpaca_symbol = ticker.replace("-", "/")
             notional = round(alloc_per_position, 2)
 
             # Saltar si ya tenemos posición abierta en este activo
             if ticker in held_symbols:
-                logger.info("Ya existe posición en %s — orden omitida para evitar acumulación.", ticker)
+                logger.info("Ya existe posición en %s — orden omitida.", ticker)
                 records.append({
                     "timestamp": ts, "ticker": ticker, "side": "BUY",
                     "qty": 0.0, "notional_usd": 0.0,
@@ -250,7 +239,7 @@ def ejecutar_ordenes_alpaca(
     return pd.DataFrame(records)
 
 
-def sincronizar_posiciones_alpaca() -> pd.DataFrame:
+def sincronizar_posiciones_alpaca(credentials: dict) -> pd.DataFrame:
     """Obtiene las posiciones abiertas actuales de la cuenta Alpaca.
 
     Retorna DataFrame con ticker, qty, market_value, unrealized_pl, side.
@@ -258,7 +247,7 @@ def sincronizar_posiciones_alpaca() -> pd.DataFrame:
     """
     ts = datetime.now(timezone.utc).isoformat()
     try:
-        client, paper = _get_alpaca_client()
+        client, paper = _get_alpaca_client(credentials)
         positions = client.get_all_positions()
         mode = "paper" if paper else "live"
 
