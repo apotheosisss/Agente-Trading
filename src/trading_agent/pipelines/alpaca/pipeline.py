@@ -27,7 +27,7 @@ def create_pipeline(**kwargs) -> Pipeline:
         [
             node(
                 func=verificar_cuenta_alpaca,
-                inputs="credentials:alpaca",
+                inputs=[],
                 outputs="alpaca_account_state",
                 name="nodo_verificar_cuenta_alpaca",
             ),
@@ -37,14 +37,13 @@ def create_pipeline(**kwargs) -> Pipeline:
                     "verified_signal",
                     "alpaca_account_state",
                     "parameters",
-                    "credentials:alpaca",
                 ],
                 outputs="alpaca_execution_log",
                 name="nodo_ejecutar_ordenes_alpaca",
             ),
             node(
                 func=sincronizar_posiciones_alpaca,
-                inputs="credentials:alpaca",
+                inputs=[],
                 outputs="alpaca_positions",
                 name="nodo_sincronizar_posiciones_alpaca",
             ),
