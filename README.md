@@ -1,35 +1,88 @@
 # 🤖 Agente de Trading con IA
 
-> Agente autónomo de inversión impulsado por modelos de lenguaje (LLM), con análisis técnico, análisis de sentimiento y backtesting. Arquitectura modular basada en Kedro.
+> Sistema autónomo de inversión impulsado por múltiples agentes LLM, análisis técnico, datos de predicción (Polymarket) y ejecución automatizada en Alpaca paper trading. Arquitectura modular basada en Kedro con despliegue continuo via GitHub Actions.
 
 ---
 
 ## 📋 Descripción General
 
-Sistema de trading algorítmico que utiliza múltiples agentes LLM especializados para analizar datos de mercado y generar señales de inversión (BUY / SELL / HOLD). El sistema integra indicadores técnicos cuantitativos con análisis de sentimiento de noticias financieras.
+Sistema de trading algorítmico que combina indicadores técnicos cuantitativos, análisis de sentimiento y múltiples agentes de lenguaje (LLM) para generar señales de inversión (BUY / HOLD / SELL). Las señales pasan por un filtro de confirmación multi-agente (TradingAgents) antes de ejecutarse automáticamente en cuentas de paper trading de Alpaca.
+
+El sistema opera **dos modelos de inversión paralelos e independientes**, cada uno con su propio universo de activos, cuenta de paper trading y horario de ejecución.
 
 ---
 
 ## 🏗️ Arquitectura
 
 ```
-Fuentes externas (Yahoo Finance, NewsAPI)
+Yahoo Finance ──► Datos OHLCV (400 días)
+     ^VIX ──────► Índice de volatilidad
+Polymarket ──────► Sentimiento de mercados de predicción
         │
         ▼
-[Pipeline: ingestion]          → data/01_raw/, data/02_intermediate/
+┌─────────────────────────────────────────┐
+│          Pipeline: signals              │
+│                                         │
+│  Ingesta → Limpieza → Features          │
+│       │                                 │
+│       ▼                                 │
+│  Agente Técnico  ─┐                     │
+│  Agente Sentimiento ─► Agente Decisión  │
+│  Agente Riesgo   ─┘        │            │
+│                             ▼           │
+│              Filtro TradingAgents       │
+│           (confirmación multi-agente)   │
+│                    │                    │
+│                    ▼                    │
+│             verified_signal             │
+└─────────────────────────────────────────┘
         │
         ▼
-[Pipeline: feature_engineering] → data/03_primary/, data/04_feature/
+┌─────────────────────────────────────────┐
+│          Pipeline: alpaca               │
+│                                         │
+│  Verificar cuenta ─► Ejecutar órdenes  │
+│  (no duplica posiciones abiertas)       │
+│         ▼                              │
+│  Sincronizar posiciones                 │
+└─────────────────────────────────────────┘
         │
         ▼
-[Pipeline: llm_agents]          → data/07_model_output/
+  Alpaca Paper Trading API
         │
         ▼
-[Pipeline: backtesting]         → data/08_reporting/
-        │
-        ▼
-[Pipeline: execution]           → Órdenes (paper trading)
+  Notificación Telegram
 ```
+
+---
+
+## 🔀 Modelos de Inversión
+
+El proyecto mantiene **dos ramas activas** con modelos independientes:
+
+### 📈 Modelo Crypto (`feature/crypto`)
+
+| Parámetro | Valor |
+|---|---|
+| Universo | 11 activos: BTC, ETH, BNB, XRP, SOL, AVAX, LINK, DOGE, LTC, COIN, SPY |
+| Enfoque | Ciclos bull/bear de criptomonedas con SPY como ancla macro |
+| Frecuencia | Diario — **09:15 AM CLT** (13:15 UTC) |
+| Max posiciones | 2 |
+| Cuenta Alpaca | `ALPACA_API_KEY` |
+| Backtest CAGR | ~61.5% \| Sharpe ~1.09 |
+| Rebalanceo | Cada 15 días (óptimo walk-forward) |
+
+### 📊 Modelo Polymarket (`feature/polymarket`)
+
+| Parámetro | Valor |
+|---|---|
+| Universo | 18 activos: SPY, QQQ, NVDA, META, AMZN, GOOGL, AAPL, MSFT, BTC, ETH, XLK, SOXX, CVX, SLB, HAL, VLO, OXY, XLE |
+| Enfoque | Tech + energía (tesis Venezuela) con sentimiento Polymarket |
+| Frecuencia | Lunes a viernes — **17:20 CLT** (21:20 UTC) |
+| Max posiciones | 2 |
+| Cuenta Alpaca | `ALPACA_API_KEY_POLY` (cuenta separada) |
+| Backtest CAGR | ~51.1% \| Sharpe ~1.13 \| MaxDD -15.9% |
+| Rebalanceo | Cada 15 días |
 
 ---
 
@@ -38,16 +91,14 @@ Fuentes externas (Yahoo Finance, NewsAPI)
 | Capa | Tecnología |
 |---|---|
 | Framework de pipelines | Kedro 1.3.1 |
-| Gestión de entorno | Astral UV |
+| Gestión de entorno | UV (Astral) |
 | Datos de mercado | yfinance |
-| Análisis técnico | pandas-ta |
-| Orquestador LLM | CrewAI |
-| Modelo LLM | GPT-4o-mini / Ollama |
-| NLP / Sentimiento | HuggingFace Transformers (FinBERT) |
-| Backtesting | VectorBT |
-| Seguimiento de experimentos | MLflow |
-| Visualización de pipelines | Kedro-Viz |
-| Dashboard | Streamlit |
+| Modelos LLM | OpenAI GPT via OpenRouter (`openai/gpt-5-nano`) |
+| Confirmación multi-agente | TradingAgents (LangGraph) |
+| Sentimiento predictivo | Polymarket Gamma API |
+| Ejecución de órdenes | Alpaca Trading API (`alpaca-py`) |
+| CI/CD | GitHub Actions |
+| Notificaciones | Telegram Bot |
 | Lenguaje | Python 3.12 |
 
 ---
@@ -56,144 +107,163 @@ Fuentes externas (Yahoo Finance, NewsAPI)
 
 ```
 trading-agent/
+├── .github/
+│   └── workflows/
+│       ├── crypto-signals.yml      # Ejecución diaria modelo crypto
+│       └── polymarket-signals.yml  # Ejecución diaria modelo polymarket
 ├── conf/
 │   ├── base/
-│   │   ├── catalog.yml         # Definición de datasets
-│   │   ├── parameters.yml      # Parámetros globales
-│   │   └── logging.yml         # Configuración de logs
+│   │   ├── catalog.yml             # Datasets (incluye verified_signal)
+│   │   ├── parameters.yml          # Universo, riesgo, LLM, backtesting
+│   │   └── logging.yml
 │   └── local/
-│       └── credentials.yml     # API keys (NO en Git)
+│       └── credentials.yml         # API keys — NO en Git
 ├── data/
-│   ├── 01_raw/                 # Datos crudos
-│   ├── 02_intermediate/        # Datos limpios
-│   ├── 03_primary/             # Features calculadas
-│   ├── 04_feature/             # Vector de features unificado
-│   ├── 07_model_output/        # Señales de trading
-│   └── 08_reporting/           # Métricas y reportes
+│   ├── 01_raw/                     # OHLCV, VIX, Polymarket
+│   ├── 02_intermediate/            # Datos limpios
+│   ├── 03_primary/                 # Features técnicos y sentimiento
+│   ├── 04_feature/                 # Feature vector unificado
+│   ├── 07_model_output/            # Señales, verified_signal, órdenes Alpaca
+│   └── 08_reporting/               # Métricas, equity curve, walk-forward
 ├── src/trading_agent/
 │   └── pipelines/
-│       ├── ingestion/
-│       ├── feature_engineering/
-│       ├── llm_agents/
-│       ├── backtesting/
-│       └── execution/
-├── tests/
-├── notebooks/
-├── docs/
+│       ├── ingestion/              # Descarga OHLCV, VIX, Polymarket
+│       ├── feature_engineering/    # RSI, MACD, BB, EMA200, ATR, sentimiento
+│       ├── llm_agents/             # Agentes técnico/sentimiento/riesgo/decisión + TradingAgents
+│       ├── backtesting/            # Backtest + walk-forward + métricas
+│       └── alpaca/                 # Ejecución real en Alpaca
 ├── pyproject.toml
-└── requirements.txt
+└── README.md
 ```
 
 ---
 
-## 🚀 Instalación desde Cero
+## ⚙️ Flujo Completo de Ejecución
+
+### GitHub Actions (automático)
+
+```
+Cada día — modelo crypto:
+  13:15 UTC → kedro run --pipeline=signals
+           → kedro run --pipeline=alpaca
+           → Notificación Telegram
+
+Lun-Vie — modelo polymarket:
+  21:20 UTC → kedro run --pipeline=signals
+           → kedro run --pipeline=alpaca
+           → Notificación Telegram
+```
+
+### Controles de seguridad en ejecución de órdenes
+
+- Solo señales BUY con `confidence >= 0.65`
+- Máximo `$5,000 USD` por orden
+- Máximo `15%` del portfolio en un solo activo
+- Reserva mínima de `5%` en cash
+- **No duplica posiciones**: si el activo ya está en cartera, la orden se omite
+
+---
+
+## 🚀 Instalación Local
 
 ### Prerrequisitos
-- [UV (Astral)](https://astral.sh/uv) instalado
+- [UV (Astral)](https://astral.sh/uv)
 - Python 3.12+
 - Git
-
-### Pasos
 
 ```bash
 # 1. Clonar el repositorio
 git clone https://github.com/apotheosisss/Agente-Trading.git
 cd Agente-Trading
 
-# 2. Crear entorno virtual
-uv venv --python 3.12
+# 2. Elegir modelo
+git checkout feature/crypto       # modelo crypto
+# o
+git checkout feature/polymarket   # modelo polymarket
 
-# 3. Activar entorno
-source .venv/bin/activate        # macOS/Linux
-.venv\Scripts\Activate.ps1       # Windows
+# 3. Instalar dependencias
+uv sync
 
-# 4. Instalar dependencias
-uv pip install -r requirements.txt
-
-# 5. Configurar credenciales
-cp conf/local/credentials.yml.example conf/local/credentials.yml
-# Editar credentials.yml con tus API keys
+# 4. Configurar credenciales
+mkdir -p conf/local
 ```
 
----
-
-## ⚙️ Configuración
-
-Editar `conf/base/parameters.yml`:
+Crear `conf/local/credentials.yml`:
 
 ```yaml
-ticker: "BTC-USD"       # Activo a operar
-start_date: "2022-01-01"
-end_date: "2024-12-31"
-```
+alpaca:
+  api_key: "TU_ALPACA_API_KEY"
+  secret_key: "TU_ALPACA_SECRET_KEY"
+  paper_trading: true
 
-Editar `conf/local/credentials.yml` (no se sube a Git):
+telegram:
+  bot_token: "TU_BOT_TOKEN"
+  chat_id: "TU_CHAT_ID"
 
-```yaml
 openai:
-  api_key: "sk-..."
-newsapi:
-  api_key: "..."
+  api_key: "TU_OPENROUTER_API_KEY"
 ```
 
 ---
 
-## ▶️ Ejecución
+## ▶️ Ejecución Local
 
 ```bash
-# Ejecutar pipeline completo
-kedro run
+# Pipeline de señales
+END=$(date +%Y-%m-%d)
+START=$(date -d "400 days ago" +%Y-%m-%d)
+uv run kedro run --pipeline=signals --params="start_date=$START,end_date=$END"
 
-# Ejecutar pipeline específico
-kedro run --pipeline ingestion
-kedro run --pipeline feature_engineering
-kedro run --pipeline llm_agents
-kedro run --pipeline backtesting
+# Pipeline de órdenes Alpaca
+uv run kedro run --pipeline=alpaca
 
-# Visualizar pipelines
-kedro viz run
-# Abrir http://localhost:4141
+# Solo backtesting
+uv run kedro run --pipeline=backtesting
 
-# Correr tests
-pytest tests/
+# Pipeline completo
+uv run kedro run
 ```
 
 ---
 
-## 🗺️ Roadmap
+## 🔑 Secrets de GitHub Actions
 
-| Milestone | Estado | Descripción |
-|---|---|---|
-| M1 — Ingesta y Features | 🔄 En progreso | Pipeline de datos y análisis técnico |
-| M2 — Agentes LLM | ⏳ Pendiente | Orquestador CrewAI con agentes especializados |
-| M3 — Backtesting | ⏳ Pendiente | Validación histórica con VectorBT |
-| M4 — Ejecución | ⏳ Pendiente | Paper trading y gestión de riesgo |
-| M5 — Dashboard | ⏳ Pendiente | Interfaz Streamlit con monitoreo en tiempo real |
+Configurar en **Settings → Secrets and variables → Actions**:
+
+| Secret | Descripción |
+|---|---|
+| `OPENAI_API_KEY` | API key de OpenRouter |
+| `ALPACA_API_KEY` | API key cuenta Alpaca — modelo crypto |
+| `ALPACA_SECRET_KEY` | Secret key cuenta Alpaca — modelo crypto |
+| `ALPACA_API_KEY_POLY` | API key cuenta Alpaca — modelo polymarket |
+| `ALPACA_SECRET_KEY_POLY` | Secret key cuenta Alpaca — modelo polymarket |
+| `TELEGRAM_BOT_TOKEN` | Token del bot de Telegram |
+| `TELEGRAM_CHAT_ID` | Chat ID para notificaciones |
 
 ---
 
-## 📐 Documentación Técnica
+## 📊 Indicadores Técnicos
 
-Ver carpeta [`docs/`](docs/):
-
-- [`docs/arquitectura.md`](docs/arquitectura.md) — Diseño del sistema
-- [`docs/diagramas/`](docs/diagramas/) — Diagramas PlantUML
-- [`docs/sdd.md`](docs/sdd.md) — Documento de Diseño de Software
-- [`docs/api.md`](docs/api.md) — Referencia de nodos y parámetros
+| Indicador | Parámetro |
+|---|---|
+| RSI | 14 períodos |
+| MACD | 12 / 26 / 9 |
+| Bollinger Bands | 20 períodos, 2σ |
+| EMA | 200 períodos (filtro de tendencia) |
+| ATR | Stop-loss dinámico (4.5× ATR) |
 
 ---
 
 ## 🔒 Reglas de Seguridad
 
-1. **Nunca** subir `conf/local/credentials.yml` a Git
-2. **Nunca** operar con dinero real antes de completar el Milestone 3 (backtesting)
-3. Todo nuevo módulo debe tener tests en `/tests/`
-4. Usar `loguru` en lugar de `print()`
-5. Commits frecuentes con mensajes descriptivos en español
+1. `conf/local/credentials.yml` **nunca** se sube a Git
+2. El sistema opera exclusivamente en **paper trading** hasta revisión manual de ≥ 30 días
+3. Para pasar a live: cambiar `paper_trading: false` en credentials.yml solo tras 30 días de revisión manual
+4. Máximo `$5,000 USD` por orden, nunca más del 15% del portfolio en un activo
 
 ---
 
 ## 👤 Autor
 
-**Claudio** — Estudiante de Ingeniería Informática mención Ciencia de Datos, DuocUC  
-Proyecto académico — v0.1.0 (en desarrollo activo)
+**Claudio** — Ingeniería Informática mención Ciencia de Datos, DuocUC  
+Proyecto personal de inversión algorítmica — en evaluación activa (paper trading)
