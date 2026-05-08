@@ -134,9 +134,12 @@ def ejecutar_ordenes_alpaca(
     confidence_threshold = float(parameters["llm"]["confidence_threshold"])
     max_positions = int(parameters["risk"]["max_positions"])
 
-    # Todos los activos del universo (cripto y acciones como SPY, COIN)
+    # Solo cripto y COIN — SPY se usa como referencia macro en el análisis
+    # pero no se ejecuta en Alpaca (el modelo polymarket ya lo cubre)
+    EXCLUIR_ALPACA = {"SPY"}
     buy_signals = signal_df[
-        (signal_df["signal"] == "BUY")
+        ~signal_df["ticker"].isin(EXCLUIR_ALPACA)
+        & (signal_df["signal"] == "BUY")
         & (signal_df["confidence"] >= confidence_threshold)
     ].copy()
 
