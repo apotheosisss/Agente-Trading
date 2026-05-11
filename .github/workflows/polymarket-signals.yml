@@ -28,6 +28,7 @@ jobs:
         run: uv sync
 
       - name: Install TradingAgents (TauricResearch oficial)
+        timeout-minutes: 8
         run: uv run pip install git+https://github.com/TauricResearch/TradingAgents.git || echo "TradingAgents no disponible — filtro de confirmacion desactivado"
 
       - name: Create credentials.yml from secrets
