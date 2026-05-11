@@ -343,6 +343,7 @@ def filtrar_signals_tradingagents(
         return signal_df
 
     # Cargar API key de OpenRouter desde credenciales
+    # TauricResearch TradingAgents lee OPENROUTER_API_KEY como variable de entorno
     try:
         _cred_path = Path("conf/local/credentials.yml")
         if _cred_path.exists():
@@ -351,40 +352,30 @@ def filtrar_signals_tradingagents(
                 _openai_key = _creds.get("openai", {}).get("api_key")
                 if _openai_key:
                     import os
-                    os.environ["OPENAI_API_KEY"] = _openai_key
+                    os.environ["OPENROUTER_API_KEY"] = _openai_key
     except Exception as exc:
         logger.warning("Error cargando credenciales: %s", exc)
         return signal_df
 
     try:
         import os as _os
+        from tradingagents.default_config import DEFAULT_CONFIG
         _home = _os.path.join(_os.path.expanduser("~"), ".tradingagents")
-        ta_config = {
+        ta_config = DEFAULT_CONFIG.copy()
+        ta_config.update({
             "project_dir": _os.path.abspath("."),
             "results_dir": _os.path.join(_home, "logs"),
             "data_cache_dir": _os.path.join(_home, "cache"),
             "memory_log_path": _os.path.join(_home, "memory", "trading_memory.md"),
-            "memory_log_max_entries": None,
-            "llm_provider": "openai",
-            "deep_think_llm": "openai/gpt-5-nano",
-            "quick_think_llm": "openai/gpt-5-nano",
-            "backend_url": "https://openrouter.ai/api/v1",
-            "anthropic_effort": None,
-            "openai_reasoning_effort": None,
-            "google_thinking_level": None,
+            "llm_provider": "openrouter",
+            "deep_think_llm": "openai/gpt-4o-mini",
+            "quick_think_llm": "openai/gpt-4o-mini",
             "checkpoint_enabled": False,
             "output_language": "English",
             "max_debate_rounds": 1,
             "max_risk_discuss_rounds": 1,
             "max_recur_limit": 100,
-            "data_vendors": {
-                "core_stock_apis": "yfinance",
-                "technical_indicators": "yfinance",
-                "fundamental_data": "yfinance",
-                "news_data": "yfinance",
-            },
-            "tool_vendors": {},
-        }
+        })
 
         from datetime import datetime
         today = datetime.now().strftime("%Y-%m-%d")
