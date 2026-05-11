@@ -175,11 +175,16 @@ def ejecutar_ordenes_alpaca(
         mode = "paper" if paper else "live"
 
         # Obtener posiciones abiertas para evitar duplicar compras
+        # Alpaca puede devolver BTCUSD, BTC/USD o BTC-USD segun el activo
         open_positions = client.get_all_positions()
-        held_symbols = {
-            str(p.symbol).replace("/", "-")  # normalizar a formato yfinance
-            for p in open_positions
-        }
+        held_symbols = set()
+        for p in open_positions:
+            sym = str(p.symbol)
+            held_symbols.add(sym)                      # BTCUSD / SPY
+            held_symbols.add(sym.replace("/", "-"))    # BTC/USD → BTC-USD
+            # BTCUSD → BTC-USD (cripto sin separador)
+            if sym.endswith("USD") and "/" not in sym and "-" not in sym:
+                held_symbols.add(sym[:-3] + "-USD")
         logger.info("Posiciones actuales en cartera: %s", held_symbols or "ninguna")
 
         for _, row in buy_signals.iterrows():
