@@ -51,7 +51,7 @@ risk:
 llm:
   model: "openai/gpt-5-nano"
   temperature: 0.1
-  confidence_threshold: 0.65
+  confidence_threshold: 0.60
   # ── TradingAgents (confirmación antes de ejecutar en Alpaca) ─
   tradingagents:
     enabled: true               # confirma BUY signals antes de Alpaca
