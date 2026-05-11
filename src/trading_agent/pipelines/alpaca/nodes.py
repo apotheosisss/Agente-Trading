@@ -210,11 +210,14 @@ def ejecutar_ordenes_alpaca(
                 continue
 
             try:
+                # Cripto usa GTC (mercado 24/7), acciones usan DAY
+                is_crypto = "/" in alpaca_symbol
+                tif = TimeInForce.GTC if is_crypto else TimeInForce.DAY
                 order_request = MarketOrderRequest(
                     symbol=alpaca_symbol,
                     notional=notional,
                     side=OrderSide.BUY,
-                    time_in_force=TimeInForce.DAY,
+                    time_in_force=tif,
                 )
                 order = client.submit_order(order_request)
                 logger.info(
