@@ -2,7 +2,7 @@ name: Polymarket Signals (Mon-Fri 17:00 EST)
 
 on:
   schedule:
-    - cron: "20 21 * * 1-5"  # 21:20 UTC = 16:20 EST, lunes a viernes (evita congestion hora en punto)
+    - cron: "20 21 * * 1-5"  # 21:20 UTC = 16:20 EST, evita congestion hora en punto
   workflow_dispatch:           # permite ejecutar manualmente desde GitHub
 
 env:
@@ -27,8 +27,9 @@ jobs:
       - name: Install dependencies
         run: uv sync
 
-      - name: Install TradingAgents
-        run: uv run pip install tradingagents || echo "TradingAgents no disponible — filtro de confirmacion desactivado"
+      - name: Install TradingAgents (TauricResearch oficial)
+        timeout-minutes: 8
+        run: uv run pip install git+https://github.com/TauricResearch/TradingAgents.git || echo "TradingAgents no disponible — filtro de confirmacion desactivado"
 
       - name: Create credentials.yml from secrets
         env:
@@ -76,24 +77,64 @@ jobs:
           uv run python - <<'PYEOF' || true
           import sys
           from pathlib import Path
+          from datetime import datetime, timezone
           sys.path.insert(0, "src")
           import notifier
+          import pandas as pd
 
           signal_dir = Path("data/07_model_output")
-          files = sorted(signal_dir.rglob("signal.json"), key=lambda p: p.stat().st_mtime)
-          if not files:
-              notifier.send("Polymarket Signals: pipeline ejecutado (sin señales encontradas)")
+          today = datetime.now(timezone.utc).strftime("%d %b %Y")
+
+          # Leer verified_signal (seniales que realmente llegan a Alpaca)
+          verified_files = sorted(signal_dir.rglob("verified_signal.json"), key=lambda p: p.stat().st_mtime)
+          exec_files     = sorted(signal_dir.rglob("alpaca_orders.csv"),    key=lambda p: p.stat().st_mtime)
+          account_files  = sorted(signal_dir.rglob("alpaca_account.csv"),   key=lambda p: p.stat().st_mtime)
+
+          if not verified_files:
+              notifier.send(f"Polymarket Signals {today}\nPipeline ejecutado sin seniales.")
           else:
-              import pandas as pd
-              df = pd.read_json(files[-1])
-              n_buy = int((df["signal"] == "BUY").sum())
-              n_sell = int((df["signal"] == "SELL").sum())
-              n_hold = int((df["signal"] == "HOLD").sum())
-              top = df[df["signal"] == "BUY"]["ticker"].tolist()[:3]
+              vf = pd.read_json(verified_files[-1])
+              n_buy  = int((vf["signal"] == "BUY").sum())
+              n_hold = int((vf["signal"] == "HOLD").sum())
+              n_sell = int((vf["signal"] == "SELL").sum())
+              buys = vf[vf["signal"] == "BUY"][["ticker", "confidence"]].head(3)
+              top_str = ", ".join(
+                  f"{r['ticker']} ({r['confidence']:.0%})"
+                  for _, r in buys.iterrows()
+              ) if n_buy > 0 else "ninguno"
+
+              # Detalle de ordenes Alpaca
+              exec_str = "ninguna"
+              if exec_files:
+                  ef = pd.read_csv(exec_files[-1])
+                  ordered  = ef[ef["status"] == "submitted"]["ticker"].tolist()
+                  held     = ef[ef["status"] == "skipped"][ef["message"] == "Posicion ya abierta"]["ticker"].tolist() if "message" in ef.columns else []
+                  no_cash  = ef[ef["status"] == "skipped"][ef["message"] == "Sin capital disponible"]["ticker"].tolist() if "message" in ef.columns else []
+
+                  parts = []
+                  if ordered:
+                      parts.append(f"Comprado: {', '.join(ordered)}")
+                  if held:
+                      parts.append(f"Ya en cartera: {', '.join(held)}")
+                  if no_cash:
+                      parts.append(f"Sin capital: {', '.join(no_cash)}")
+                  exec_str = " | ".join(parts) if parts else "ninguna"
+
+              # Estado de la cuenta
+              equity_str = ""
+              if account_files:
+                  ac = pd.read_csv(account_files[-1])
+                  equity = float(ac["equity_usd"].iloc[0])
+                  cash   = float(ac["cash_usd"].iloc[0])
+                  n_pos  = int(ac["n_positions"].iloc[0])
+                  equity_str = f"\nCuenta: ${equity:,.0f} | Cash: ${cash:,.0f} | Pos: {n_pos}"
+
               msg = (
-                  f"Polymarket Signals\n"
-                  f"BUY={n_buy} | HOLD={n_hold} | SELL={n_sell}\n"
-                  f"Top picks: {', '.join(top) if top else 'ninguno'}"
+                  f"Polymarket Signals — {today}\n"
+                  f"BUY {n_buy} | HOLD {n_hold} | SELL {n_sell}\n"
+                  f"Top picks: {top_str}\n"
+                  f"Ejecutado: {exec_str}"
+                  f"{equity_str}"
               )
               notifier.send(msg)
           PYEOF
