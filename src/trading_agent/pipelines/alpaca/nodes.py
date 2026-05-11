@@ -134,14 +134,9 @@ def ejecutar_ordenes_alpaca(
     confidence_threshold = float(parameters["llm"]["confidence_threshold"])
     max_positions = int(parameters["risk"]["max_positions"])
 
-    # SPY permanece en el universo de análisis como radar de riesgo macro,
-    # pero se excluye de ejecución — ante un escenario pandémico el modelo
-    # usa SPY como señal de alarma sin tener exposición directa a él,
-    # capturando el 100% del rebote crypto post-crisis.
-    EXCLUIR_ALPACA = {"SPY"}
+    # Todos los activos del universo son ejecutables en Polymarket
     buy_signals = signal_df[
-        ~signal_df["ticker"].isin(EXCLUIR_ALPACA)
-        & (signal_df["signal"] == "BUY")
+        (signal_df["signal"] == "BUY")
         & (signal_df["confidence"] >= confidence_threshold)
     ].copy()
 
