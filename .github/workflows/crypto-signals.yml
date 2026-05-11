@@ -27,8 +27,8 @@ jobs:
       - name: Install dependencies
         run: uv sync
 
-      - name: Install TradingAgents
-        run: uv run pip install tradingagents || echo "TradingAgents no disponible — filtro de confirmacion desactivado"
+      - name: Install TradingAgents (TauricResearch oficial)
+        run: uv run pip install git+https://github.com/TauricResearch/TradingAgents.git || echo "TradingAgents no disponible — filtro de confirmacion desactivado"
 
       - name: Create credentials.yml from secrets
         env:
