@@ -41,7 +41,7 @@ def _load_credentials() -> dict:
         return yaml.safe_load(f) or {}
 
 
-def _get_alpaca_client():
+def _get_alpaca_client(credentials: dict | None = None):
     """Instancia el cliente de Alpaca.  Siempre usa paper a menos que se indique explícitamente."""
     try:
         from alpaca.trading.client import TradingClient
@@ -50,7 +50,8 @@ def _get_alpaca_client():
             "Instala alpaca-py: pip install alpaca-py"
         ) from exc
 
-    credentials = _load_credentials()
+    if credentials is None:
+        credentials = _load_credentials()
     cfg = credentials.get("alpaca", {})
     api_key = cfg.get("api_key", "")
     secret_key = cfg.get("secret_key", "")
@@ -133,8 +134,14 @@ def ejecutar_ordenes_alpaca(
     confidence_threshold = float(parameters["llm"]["confidence_threshold"])
     max_positions = int(parameters["risk"]["max_positions"])
 
+    # SPY permanece en el universo de análisis como radar de riesgo macro,
+    # pero se excluye de ejecución — ante un escenario pandémico el modelo
+    # usa SPY como señal de alarma sin tener exposición directa a él,
+    # capturando el 100% del rebote crypto post-crisis.
+    EXCLUIR_ALPACA = {"SPY"}
     buy_signals = signal_df[
-        (signal_df["signal"] == "BUY")
+        ~signal_df["ticker"].isin(EXCLUIR_ALPACA)
+        & (signal_df["signal"] == "BUY")
         & (signal_df["confidence"] >= confidence_threshold)
     ].copy()
 
@@ -168,22 +175,28 @@ def ejecutar_ordenes_alpaca(
         mode = "paper" if paper else "live"
 
         # Obtener posiciones abiertas para evitar duplicar compras
+        # Alpaca puede devolver BTCUSD, BTC/USD o BTC-USD segun el activo
         open_positions = client.get_all_positions()
-        held_symbols = {
-            str(p.symbol).replace("/", "-")
-            for p in open_positions
-        }
+        held_symbols = set()
+        for p in open_positions:
+            sym = str(p.symbol)
+            held_symbols.add(sym)                      # BTCUSD / SPY
+            held_symbols.add(sym.replace("/", "-"))    # BTC/USD → BTC-USD
+            # BTCUSD → BTC-USD (cripto sin separador)
+            if sym.endswith("USD") and "/" not in sym and "-" not in sym:
+                held_symbols.add(sym[:-3] + "-USD")
         logger.info("Posiciones actuales en cartera: %s", held_symbols or "ninguna")
 
         for _, row in buy_signals.iterrows():
             ticker = str(row["ticker"])
             # Alpaca usa "BTC/USD" para cripto (no "BTC-USD" de yfinance)
-            alpaca_symbol = ticker.replace("-", "/")
+            # Para acciones (SPY, COIN) el símbolo se mantiene igual
+            alpaca_symbol = ticker.replace("-USD", "/USD") if "-USD" in ticker else ticker
             notional = round(alloc_per_position, 2)
 
             # Saltar si ya tenemos posición abierta en este activo
             if ticker in held_symbols:
-                logger.info("Ya existe posición en %s — orden omitida.", ticker)
+                logger.info("Ya existe posición en %s — orden omitida para evitar acumulación.", ticker)
                 records.append({
                     "timestamp": ts, "ticker": ticker, "side": "BUY",
                     "qty": 0.0, "notional_usd": 0.0,
