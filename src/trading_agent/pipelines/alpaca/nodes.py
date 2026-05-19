@@ -139,64 +139,109 @@ def ejecutar_ordenes_alpaca(
     # usa SPY como señal de alarma sin tener exposición directa a él,
     # capturando el 100% del rebote crypto post-crisis.
     EXCLUIR_ALPACA = {"SPY"}
+
     buy_signals = signal_df[
         ~signal_df["ticker"].isin(EXCLUIR_ALPACA)
         & (signal_df["signal"] == "BUY")
         & (signal_df["confidence"] >= confidence_threshold)
-    ].copy()
+    ].sort_values("confidence", ascending=False).head(max_positions).copy()
 
-    if buy_signals.empty:
-        logger.info("Sin seniales BUY aprobadas para Alpaca.")
-        return pd.DataFrame([{
-            "timestamp": ts, "ticker": "", "side": "HOLD",
-            "qty": 0.0, "notional_usd": 0.0, "status": "no_signals",
-            "message": "Sin seniales BUY con confianza suficiente",
-        }])
-
-    # Valor total del portfolio
-    portfolio_equity = float(account_state["equity_usd"].iloc[0])
-    available_cash = float(account_state["cash_usd"].iloc[0])
-    cash_reserve = portfolio_equity * MIN_CASH_RESERVE
-    investable_cash = max(available_cash - cash_reserve, 0.0)
-
-    alloc_per_position = min(
-        portfolio_equity / max_positions,
-        investable_cash / max(len(buy_signals), 1),
-        MAX_ORDER_USD,
-        portfolio_equity * MAX_PORTFOLIO_PCT,
-    )
+    sell_signals = signal_df[
+        signal_df["signal"] == "SELL"
+    ]["ticker"].tolist()
 
     records = []
     try:
-        from alpaca.trading.requests import MarketOrderRequest
+        from alpaca.trading.requests import MarketOrderRequest, ClosePositionRequest
         from alpaca.trading.enums import OrderSide, TimeInForce
 
         client, paper = _get_alpaca_client()
         mode = "paper" if paper else "live"
 
-        # Obtener posiciones abiertas para evitar duplicar compras
-        # Alpaca puede devolver BTCUSD, BTC/USD o BTC-USD segun el activo
+        # ── Normalizar posiciones abiertas ────────────────────────────────
         open_positions = client.get_all_positions()
-        held_symbols = set()
+        # Mapa: ticker_yfinance -> objeto posición Alpaca
+        held_map = {}
         for p in open_positions:
             sym = str(p.symbol)
-            held_symbols.add(sym)                      # BTCUSD / SPY
-            held_symbols.add(sym.replace("/", "-"))    # BTC/USD → BTC-USD
-            # BTCUSD → BTC-USD (cripto sin separador)
+            variants = {sym, sym.replace("/", "-")}
             if sym.endswith("USD") and "/" not in sym and "-" not in sym:
-                held_symbols.add(sym[:-3] + "-USD")
-        logger.info("Posiciones actuales en cartera: %s", held_symbols or "ninguna")
+                variants.add(sym[:-3] + "-USD")
+            for v in variants:
+                held_map[v] = p
+        held_symbols = set(held_map.keys())
+        logger.info(
+            "Posiciones en cartera: %d | %s",
+            len(open_positions), {p.symbol for p in open_positions} or "ninguna"
+        )
+
+        # ── 1. VENTAS: cerrar posiciones con señal SELL ───────────────────
+        for ticker in sell_signals:
+            if ticker not in held_map:
+                continue
+            pos = held_map[ticker]
+            alpaca_symbol = ticker.replace("-USD", "/USD") if "-USD" in ticker else ticker
+            try:
+                client.close_position(alpaca_symbol)
+                logger.info("[%s] SELL %s — señal SELL, cerrando posición", mode, ticker)
+                records.append({
+                    "timestamp": ts, "ticker": ticker, "side": "SELL",
+                    "qty": float(pos.qty), "notional_usd": float(pos.market_value),
+                    "status": "submitted", "message": "Señal SELL — posición cerrada",
+                    "mode": mode,
+                })
+                held_symbols.discard(ticker)
+            except Exception as exc:
+                logger.error("Error cerrando posición %s: %s", ticker, exc)
+                records.append({
+                    "timestamp": ts, "ticker": ticker, "side": "SELL",
+                    "qty": 0.0, "notional_usd": 0.0,
+                    "status": "error", "message": str(exc),
+                    "mode": mode,
+                })
+
+        # ── 2. COMPRAS: solo si hay hueco en el portfolio ─────────────────
+        n_open = len([p for p in open_positions
+                      if str(p.symbol) not in {r["ticker"] for r in records
+                                                if r["side"] == "SELL" and r["status"] == "submitted"}])
+        slots_available = max(max_positions - n_open, 0)
+
+        if buy_signals.empty or slots_available == 0:
+            if slots_available == 0:
+                logger.info("Portfolio lleno (%d/%d posiciones) — sin compras.", n_open, max_positions)
+            else:
+                logger.info("Sin seniales BUY aprobadas para Alpaca.")
+            if not records:
+                records.append({
+                    "timestamp": ts, "ticker": "", "side": "HOLD",
+                    "qty": 0.0, "notional_usd": 0.0, "status": "no_signals",
+                    "message": f"Portfolio {n_open}/{max_positions} posiciones — sin accion",
+                })
+            return pd.DataFrame(records)
+
+        # Valor total del portfolio
+        portfolio_equity = float(account_state["equity_usd"].iloc[0])
+        available_cash = float(account_state["cash_usd"].iloc[0])
+        cash_reserve = portfolio_equity * MIN_CASH_RESERVE
+        investable_cash = max(available_cash - cash_reserve, 0.0)
+
+        # Solo comprar los slots disponibles
+        buy_signals = buy_signals.head(slots_available)
+        alloc_per_position = min(
+            portfolio_equity / max_positions,
+            investable_cash / max(len(buy_signals), 1),
+            MAX_ORDER_USD,
+            portfolio_equity * MAX_PORTFOLIO_PCT,
+        )
 
         for _, row in buy_signals.iterrows():
             ticker = str(row["ticker"])
-            # Alpaca usa "BTC/USD" para cripto (no "BTC-USD" de yfinance)
-            # Para acciones (SPY, COIN) el símbolo se mantiene igual
             alpaca_symbol = ticker.replace("-USD", "/USD") if "-USD" in ticker else ticker
             notional = round(alloc_per_position, 2)
 
             # Saltar si ya tenemos posición abierta en este activo
             if ticker in held_symbols:
-                logger.info("Ya existe posición en %s — orden omitida para evitar acumulación.", ticker)
+                logger.info("Ya existe posición en %s — orden omitida.", ticker)
                 records.append({
                     "timestamp": ts, "ticker": ticker, "side": "BUY",
                     "qty": 0.0, "notional_usd": 0.0,
@@ -231,7 +276,7 @@ def ejecutar_ordenes_alpaca(
                 )
                 records.append({
                     "timestamp": ts, "ticker": ticker, "side": "BUY",
-                    "qty": 0.0,  # se llena al completarse
+                    "qty": 0.0,
                     "notional_usd": notional,
                     "status": "submitted",
                     "message": f"order_id={order.id}",
