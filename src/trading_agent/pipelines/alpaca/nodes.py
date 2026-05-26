@@ -169,19 +169,32 @@ def ejecutar_ordenes_alpaca(
             len(open_positions), {p.symbol for p in open_positions} or "ninguna"
         )
 
-        # ── 1. VENTAS: cerrar posiciones con señal SELL ───────────────────
-        for ticker in sell_signals:
+        # Top tickers objetivo hoy
+        target_tickers = set(buy_signals["ticker"].tolist())
+
+        # ── 1. VENTAS: SELL explícito + rotación (fuera del top-N) ──────────
+        tickers_a_vender = set(sell_signals)
+        for ticker, pos in held_map.items():
+            if ticker not in held_symbols:
+                continue
+            # Rotar: si la posición ya no está en el top-N de hoy, venderla
+            if ticker not in target_tickers and ticker not in tickers_a_vender:
+                tickers_a_vender.add(ticker)
+                logger.info("%s salio del top-%d — rotando", ticker, max_positions)
+
+        for ticker in tickers_a_vender:
             if ticker not in held_map:
                 continue
             pos = held_map[ticker]
             alpaca_symbol = ticker.replace("-USD", "/USD") if "-USD" in ticker else ticker
+            razon = "Señal SELL" if ticker in sell_signals else f"Rotacion — fuera del top-{max_positions}"
             try:
                 client.close_position(alpaca_symbol)
-                logger.info("[%s] SELL %s — señal SELL, cerrando posición", mode, ticker)
+                logger.info("[%s] SELL %s — %s", mode, ticker, razon)
                 records.append({
                     "timestamp": ts, "ticker": ticker, "side": "SELL",
                     "qty": float(pos.qty), "notional_usd": float(pos.market_value),
-                    "status": "submitted", "message": "Señal SELL — posición cerrada",
+                    "status": "submitted", "message": razon,
                     "mode": mode,
                 })
                 held_symbols.discard(ticker)
@@ -194,22 +207,22 @@ def ejecutar_ordenes_alpaca(
                     "mode": mode,
                 })
 
-        # ── 2. COMPRAS: solo si hay hueco en el portfolio ─────────────────
-        n_open = len([p for p in open_positions
-                      if str(p.symbol) not in {r["ticker"] for r in records
-                                                if r["side"] == "SELL" and r["status"] == "submitted"}])
+        # ── 2. COMPRAS: slots libres tras ventas ──────────────────────────
+        sold_tickers = {r["ticker"] for r in records
+                        if r["side"] == "SELL" and r["status"] == "submitted"}
+        n_open = len(open_positions) - len(sold_tickers)
         slots_available = max(max_positions - n_open, 0)
 
         if buy_signals.empty or slots_available == 0:
-            if slots_available == 0:
-                logger.info("Portfolio lleno (%d/%d posiciones) — sin compras.", n_open, max_positions)
+            if not buy_signals.empty and slots_available == 0:
+                logger.info("Portfolio lleno (%d/%d) — sin compras.", n_open, max_positions)
             else:
                 logger.info("Sin seniales BUY aprobadas para Alpaca.")
             if not records:
                 records.append({
                     "timestamp": ts, "ticker": "", "side": "HOLD",
                     "qty": 0.0, "notional_usd": 0.0, "status": "no_signals",
-                    "message": f"Portfolio {n_open}/{max_positions} posiciones — sin accion",
+                    "message": f"Portfolio {n_open}/{max_positions} — sin accion",
                 })
             return pd.DataFrame(records)
 
