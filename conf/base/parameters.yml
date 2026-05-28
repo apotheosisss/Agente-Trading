@@ -40,7 +40,7 @@ risk:
   min_entry_score: 0.5          # umbral bajo: captura momentum naciente, más trades
   max_drawdown_circuit: 0.55    # circuit ancho: solo frena ante bear real (-55%), no correcciones
   circuit_break_cooldown: 1     # re-entra al día siguiente tras un susto
-  vix_crisis_threshold: 999     # VIX desactivado — irrelevante para crypto puro
+  vix_crisis_threshold: 50      # radar pandémico: VIX>50 liquida todo (COVID llegó a 82)
 
 # ── AGENTES LLM ──────────────────────────────────────
 llm:
