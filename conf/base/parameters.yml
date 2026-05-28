@@ -2,9 +2,7 @@
 # Rama: feature/crypto — inversión corto/mediano plazo
 # Universo crypto-heavy: capturar bull runs con rotación entre altcoins
 universe:
-  # ── Ancla macro ───────────────────────────────────────
-  - "SPY"     # S&P 500 — refugio cuando crypto cae; correlación baja
-  # ── Crypto large-cap (mayor liquidez) ────────────────
+  # ── Pure crypto: modelo agresivo, máximo riesgo/recompensa ───
   - "BTC-USD" # Bitcoin — reserva de valor, lidera ciclos
   - "ETH-USD" # Ethereum — DeFi, NFTs, contratos inteligentes
   - "BNB-USD" # Binance Coin — utility token del mayor exchange
@@ -14,8 +12,6 @@ universe:
   - "LINK-USD"# Chainlink — infraestructura oráculos DeFi
   - "DOGE-USD"# Dogecoin — alta liquidez, momentum especulativo
   - "LTC-USD" # Litecoin — "digital silver", ciclo vinculado a BTC
-  # ── Acciones proxy crypto (alta correlación, mayor liquidez bolsa) ──
-  - "COIN"    # Coinbase — ingresos ligados a volumen crypto, más estable que mineros
 
 ticker: "BTC-USD"      # ticker principal para reportes LLM
 timeframe: "1d"
@@ -32,26 +28,25 @@ technical:
   bb_std: 2
   ema_200: 200           # filtro de tendencia principal (200d clasico)
 
-# ── RIESGO ───────────────────────────────────────────
-# Crypto: crashes rápidos y profundos (-70%), recuperaciones también rápidas.
-# Estrategia: actuar antes ante caídas, re-entrar pronto en rebotes.
+# ── RIESGO — PERFIL AGRESIVO ─────────────────────────
+# Modelo agresivo: deja correr ganadores, mínimos frenos, 100% invertido.
 risk:
-  max_positions: 2              # concentración en top 2: captura el altcoin ganador del ciclo
-  stop_loss_atr_mult: 4.5       # optimo: 10 microajustes 3.0-5.7, mejor CAGR+Sharpe en ATR=4.5
+  max_positions: 2              # concentración en top 2 del ranking
+  stop_loss_atr_mult: 6.0       # stop amplio: evita whipsaws de la volatilidad crypto
   max_position_pct: 0.50        # 50% por posición
   stop_loss_pct: 0.05
   take_profit_pct: 0.10
-  # ── Controles de riesgo ────────────────────────────
-  min_entry_score: 1.0          # optimo: menor umbral captura momentum naciente en crypto
-  max_drawdown_circuit: 0.40    # 40%: en crypto -35% aún puede ser corrección; -40% es bear real
-  circuit_break_cooldown: 2     # cooldown corto: crypto rebota rápido (no perder recuperación)
-  vix_crisis_threshold: 55      # VIX mide renta variable, no crypto — umbral más alto
+  # ── Controles de riesgo (minimizados) ──────────────
+  min_entry_score: 0.5          # umbral bajo: captura momentum naciente, más trades
+  max_drawdown_circuit: 0.55    # circuit ancho: solo frena ante bear real (-55%), no correcciones
+  circuit_break_cooldown: 1     # re-entra al día siguiente tras un susto
+  vix_crisis_threshold: 999     # VIX desactivado — irrelevante para crypto puro
 
 # ── AGENTES LLM ──────────────────────────────────────
 llm:
   model: "openai/gpt-5-nano"
   temperature: 0.1
-  confidence_threshold: 0.60
+  confidence_threshold: 0.50
   # ── TradingAgents (confirmación antes de ejecutar en Alpaca) ─
   tradingagents:
     enabled: true               # confirma BUY signals antes de Alpaca
@@ -70,4 +65,4 @@ backtesting:
   commission: 0.001
   rebalance_day: 0              # 0 = lunes (isoweekday - 1)
   walk_forward_split: "2022-01-01"  # in-sample: bull 2019-2021 | OOS: bear 2022 + recovery 2023-2026
-  rebalance_interval: 15            # cada 3 semanas — optimo del barrido (CAGR 61.5%, Sharpe 1.091)
+  rebalance_interval: 3             # rotacion cada 3 dias — optimo agresivo (CAGR 46%, Sharpe 1.303)
