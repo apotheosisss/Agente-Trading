@@ -81,8 +81,15 @@ El proyecto mantiene **dos ramas activas** con modelos independientes:
 | Frecuencia | Lunes a viernes — **17:20 CLT** (21:20 UTC) |
 | Max posiciones | 2 |
 | Cuenta Alpaca | `ALPACA_API_KEY_POLY` (cuenta separada) |
-| Backtest CAGR | ~51.1% \| Sharpe ~1.13 \| MaxDD -15.9% |
-| Rebalanceo | Cada 15 días |
+| Backtest (full, costes realistas) | CAGR ~21% \| Sharpe ~0.65 \| **MaxDD -35%** |
+| Backtest (out-of-sample 2022+) | CAGR ~7% \| Sharpe ~0.38 |
+| Rebalanceo | Semanal (lunes) |
+
+> ⚠️ **Nota de honestidad metodológica:** las cifras anteriores (CAGR ~51%, MaxDD -15.9%)
+> correspondían a la ventana **in-sample** (2019-2021), no al resultado completo. El walk-forward
+> multi-ventana muestra que el edge se concentra en 2020-2021 y los últimos 3 años están planos
+> (~0% CAGR). Ninguna parametrización explorada bate de forma robusta a SPY out-of-sample con un
+> drawdown operable. Ver `AUDITORIA_HALLAZGOS.md` y `OPTIMIZACION_RESULTADOS.md`.
 
 ---
 

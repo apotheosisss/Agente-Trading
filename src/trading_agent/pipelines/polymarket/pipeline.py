@@ -2,7 +2,11 @@
 
 from kedro.pipeline import Pipeline, node
 
-from .nodes import generar_reporte_polymarket, obtener_seniales_polymarket
+from .nodes import (
+    generar_reporte_polymarket,
+    obtener_seniales_polymarket,
+    persistir_historico_polymarket,
+)
 
 
 def create_pipeline(**kwargs) -> Pipeline:
@@ -28,6 +32,12 @@ def create_pipeline(**kwargs) -> Pipeline:
                 inputs="polymarket_signals",
                 outputs="poly_report",
                 name="nodo_poly_report",
+            ),
+            node(
+                func=persistir_historico_polymarket,
+                inputs=["polymarket_signals", "parameters"],
+                outputs="polymarket_history",
+                name="nodo_polymarket_historico",
             ),
         ]
     )

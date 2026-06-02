@@ -47,6 +47,10 @@ def read_metrics():
     with open(WF_PATH, encoding="utf-8") as f:
         wf = list(csv.DictReader(f))
     oos = next(r for r in wf if "Out-of-sample" in r["periodo"])
+    # Mediana de Sharpe entre folds (métrica de selección anti-overfit)
+    resumen = next((r for r in wf if "RESUMEN" in r["periodo"]), None)
+    median_fold_sharpe = float(resumen["sharpe"]) if resumen else float(oos["sharpe"])
+    worst_fold_sharpe = float(resumen["max_drawdown_pct"]) if resumen else float(oos["sharpe"])
     return {
         "cagr":       float(row["cagr_pct"]),
         "sharpe":     float(row["sharpe_ratio"]),
@@ -57,18 +61,38 @@ def read_metrics():
         "trades_yr":  float(row["trades_per_year"]),
         "oos_cagr":   float(oos["cagr_pct"]),
         "oos_sharpe": float(oos["sharpe"]),
+        "median_fold_sharpe": median_fold_sharpe,
+        "worst_fold_sharpe":  worst_fold_sharpe,
     }
 
+
+# ── Criterio de selección anti-overfit ───────────────────────────────────────
+# Rankea por la MEDIANA de Sharpe entre folds (consistencia temporal), no por
+# el resultado full (contaminado por in-sample). Descarta configs con drawdown
+# inaceptable.
+MAX_ACCEPTABLE_DD = -25.0   # MaxDD peor que esto = descartada
+
+def selection_key(m: dict) -> float:
+    if m["maxdd"] < MAX_ACCEPTABLE_DD:
+        return -999.0
+    return m["median_fold_sharpe"]
+
 def run_kedro():
-    r = subprocess.run(["uv", "run", "kedro", "run"], capture_output=True, text=True)
+    # Solo el pipeline de backtesting: reutiliza feature_vector/vix cacheados.
+    # Evita re-descargar de yfinance en cada iteración (rate-limiting → tickers
+    # omitidos → métricas corruptas) y es ~15x más rápido.
+    r = subprocess.run(
+        ["uv", "run", "kedro", "run", "--pipeline", "backtesting"],
+        capture_output=True, text=True,
+    )
     return "Pipeline execution completed" in r.stdout + r.stderr
 
 # ── Correr sweep ──────────────────────────────────────
 original_yaml = load_yaml()
 results = {}
 
-print(f"\n{'Interval':>9} {'Score':>6} {'Trades/yr':>10} {'WR%':>6} {'CAGR':>7} {'Sharpe':>7} {'MaxDD':>8} {'Equity':>12} {'OOS%':>7}")
-print("-" * 82)
+print(f"\n{'Interval':>9} {'Score':>6} {'Trd/yr':>7} {'CAGR':>7} {'Sharpe':>7} {'MaxDD':>8} {'OOS-CAGR':>9} {'MedFold-Sh':>11}")
+print("-" * 80)
 
 for interval in INTERVALS:
     for score in SCORES:
@@ -78,31 +102,37 @@ for interval in INTERVALS:
         if ok:
             m = read_metrics()
             results[(interval, score)] = m
-            print(f"  {interval:>7}d  {score:>5.1f}  {m['trades_yr']:>9.1f}  {m['win_rate']:>5.1f}%  "
+            flag = " X" if m["maxdd"] < MAX_ACCEPTABLE_DD else ""
+            print(f"  {interval:>7}d  {score:>5.1f}  {m['trades_yr']:>6.1f}  "
                   f"{m['cagr']:>6.1f}%  {m['sharpe']:>7.3f}  {m['maxdd']:>7.1f}%  "
-                  f"${m['equity']:>10,.0f}  {m['oos_cagr']:>6.1f}%")
+                  f"{m['oos_cagr']:>8.1f}%  {m['median_fold_sharpe']:>10.2f}{flag}")
         else:
             print(f"  {interval:>7}d  {score:>5.1f}  FALLO")
 
 save_yaml(original_yaml)
 
-# ── Tabla final ordenada por Sharpe ──────────────────
+# ── Tabla final ordenada por MEDIANA de Sharpe entre folds (anti-overfit) ──
 if not results:
     print("Sin resultados.")
 else:
-    print("\n\n" + "=" * 90)
-    print("TOP CONFIGURACIONES — ordenadas por Sharpe")
-    print(f"{'Interval':>9} {'Score':>6} {'Trades/yr':>10} {'WR%':>6} {'CAGR':>7} {'Sharpe':>7} {'MaxDD':>8} {'Equity':>12} {'OOS CAGR':>9}")
-    print("-" * 90)
+    print("\n\n" + "=" * 92)
+    print("TOP CONFIGURACIONES — ordenadas por MEDIANA Sharpe folds (descarta MaxDD<-25%)")
+    print(f"{'Interval':>9} {'Score':>6} {'Trd/yr':>7} {'CAGR':>7} {'Sharpe':>7} {'MaxDD':>8} {'OOS-CAGR':>9} {'MedFold-Sh':>11}")
+    print("-" * 92)
 
-    sorted_results = sorted(results.items(), key=lambda x: x[1]["sharpe"], reverse=True)
+    sorted_results = sorted(results.items(), key=lambda x: selection_key(x[1]), reverse=True)
     for (interval, score), m in sorted_results[:8]:
-        print(f"  {interval:>7}d  {score:>5.1f}  {m['trades_yr']:>9.1f}  {m['win_rate']:>5.1f}%  "
+        flag = " X" if m["maxdd"] < MAX_ACCEPTABLE_DD else ""
+        print(f"  {interval:>7}d  {score:>5.1f}  {m['trades_yr']:>6.1f}  "
               f"{m['cagr']:>6.1f}%  {m['sharpe']:>7.3f}  {m['maxdd']:>7.1f}%  "
-              f"${m['equity']:>10,.0f}  {m['oos_cagr']:>8.1f}%")
-    print("=" * 90)
+              f"{m['oos_cagr']:>8.1f}%  {m['median_fold_sharpe']:>10.2f}{flag}")
+    print("=" * 92)
 
     best = sorted_results[0]
-    print(f"\nMejor configuracion: interval={best[0][0]}d, score={best[0][1]}")
-    print(f"  CAGR={best[1]['cagr']:.1f}%, Sharpe={best[1]['sharpe']:.3f}, MaxDD={best[1]['maxdd']:.1f}%, Equity=${best[1]['equity']:,.0f}")
-    print(f"\nYAML restaurado.")
+    bm = best[1]
+    print(f"\nMejor config (anti-overfit): interval={best[0][0]}d, min_entry_score={best[0][1]}")
+    print(f"  MedianFoldSharpe={bm['median_fold_sharpe']:.2f} | OOS-CAGR={bm['oos_cagr']:.1f}% | "
+          f"CAGR-full={bm['cagr']:.1f}% | MaxDD={bm['maxdd']:.1f}%")
+    if selection_key(bm) <= -999.0:
+        print("  ADVERTENCIA: ninguna config pasó el filtro de MaxDD. Revisar estrategia base.")
+    print("\nYAML restaurado.")
