@@ -1,30 +1,56 @@
 # ── UNIVERSO DE ACTIVOS ───────────────────────────────
-# Configuración óptima: tech + energía Venezuela (mejor resultado en 5 experimentos)
+# Multi-activo descorrelacionado (r2crypto) para la estrategia TSMOM long/short.
 universe:
-  # ── Tech / Growth ─────────────────────────────────────
-  - "SPY"     # S&P 500 — referencia / ancla
-  - "QQQ"     # Nasdaq 100 — tecnología
-  - "NVDA"    # Nvidia — semiconductor / AI líder
-  - "META"    # Meta — mega-cap growth
-  - "AMZN"    # Amazon — cloud + e-commerce
-  - "GOOGL"   # Alphabet — diversificado tech
-  - "AAPL"    # Apple — large cap quality
-  - "MSFT"    # Microsoft — cloud + AI
-  - "BTC-USD" # Bitcoin — alta volatilidad / alto potencial
-  - "ETH-USD" # Ethereum — cripto #2
-  - "XLK"     # Tech ETF — exposición sectorial amplia
-  - "SOXX"    # Semiconductores ETF — ciclo AI
-  # ── Energía / Venezuela ───────────────────────────────
-  - "CVX"     # Chevron — única empresa EEUU con licencia para operar en Venezuela
-  - "SLB"     # SLB (Schlumberger) — servicios petroleros, reconstrucción infraestructura
-  - "HAL"     # Halliburton — perforación y completación, operó en Venezuela pre-sanciones
-  - "VLO"     # Valero — refinería top EEUU, procesa crudo pesado venezolano
-  - "OXY"     # Occidental Petroleum — alta exposición precio crudo, Latinoamérica
-  - "XLE"     # Energy ETF — exposición diversificada sector energético
+  # ── Renta variable ──
+  - "SPY"     # S&P 500 (ancla / benchmark / régimen)
+  - "QQQ"     # Nasdaq 100 — tech US
+  - "IWM"     # Russell 2000 — small caps US
+  - "EFA"     # Desarrollados ex-US
+  - "EEM"     # Emergentes
+  - "VNQ"     # REITs
+  # ── Renta fija ──
+  - "IEF"     # Treasuries 7-10y
+  - "TLT"     # Treasuries 20y+
+  - "LQD"     # Corporativos IG
+  - "SHY"     # Treasuries 1-3y (cuasi-cash)
+  # ── Reales ──
+  - "GLD"     # Oro
+  - "DBC"     # Materias primas
+  - "USO"     # Petróleo
+  - "DBA"     # Agrícolas
+  - "SLV"     # Plata
+  # ── Divisas ──
+  - "UUP"     # USD
+  - "FXE"     # EUR
+  - "FXY"     # JPY
+  # ── Cripto ──
+  - "BTC-USD" # Bitcoin
+  - "ETH-USD" # Ethereum
 
-ticker: "QQQ"          # ticker principal para reportes LLM
+ticker: "QQQ"          # ticker principal para reportes LLM (legacy)
 timeframe: "1d"
-start_date: "2019-01-01"   # 6 años: COVID 2020 + bear 2022 + recovery
+
+# ── ESTRATEGIA DE PRODUCCIÓN: TSMOM long/short ────────
+# Config ganadora (ver OPTIMIZACION_RESULTADOS.md). Dirige el pipeline 'tsmom'.
+tsmom:
+  lookbacks: [63, 126, 252]   # trend 3/6/12 meses
+  vol_window: 63
+  per_pos_vol: 0.10
+  max_w: 0.20
+  signal_mode: "strength"     # señal de fuerza de tendencia (continua)
+  pvt: 0.12                   # vol objetivo anual de cartera (risk parity)
+  max_gross: 1.5
+  max_lev: 3.0
+  rebal: 21                   # rebalanceo mensual
+  cost_bps: 0.0010
+  notrade: 0.0
+  rev_w: 0.2                  # sleeve de reversión/value (peso disciplinado)
+  rev_lb: 504                 # lookback reversión (~2 años)
+
+# ── ESTRATEGIA DE SEÑAL (legacy, congelada) ───────────
+signal_strategy: "dual_mom"
+signal_min_score: 0.0
+start_date: "2015-01-01"   # más historia para el lookback de reversión (504d)
 end_date: "2026-04-27"
 
 # ── INDICADORES TÉCNICOS ──────────────────────────────
@@ -39,16 +65,22 @@ technical:
 
 # ── RIESGO ───────────────────────────────────────────
 risk:
-  max_positions: 2              # concentración en top 2: captura outsized returns de los ganadores
+  max_positions: 4              # rotación: mantener top-4 del universo multi-activo
   stop_loss_atr_mult: 3.0       # stops amplios: growth stocks tienen alta volatilidad
   max_position_pct: 0.50        # 50% por posición (2 posiciones = 100%)
   stop_loss_pct: 0.05
   take_profit_pct: 0.10
   # ── Controles de riesgo ────────────────────────────
   min_entry_score: 2.0          # sólo activos con momentum positivo claro entran
-  max_drawdown_circuit: 0.25    # circuit breaker sólo para crashes rápidos (COVID-like)
-  circuit_break_cooldown: 3     # cooldown mínimo: re-entra rápido para no perder recuperaciones
+  max_drawdown_circuit: 0.20    # circuit breaker: liquidar al -20% desde pico
+  circuit_break_cooldown: 5     # cooldown mínimo tras circuit break
   vix_crisis_threshold: 40      # VIX > 40 → liquidar todo (pánico extremo)
+  # ── Fase A: controles de riesgo nuevos ──────────────
+  circuit_rearm_regime: true    # re-entrar sólo cuando regime_ticker > EMA200
+  regime_ticker: "SPY"          # ancla de régimen de mercado
+  trailing_stop: false          # OFF: evidencia muestra whipsaw sin beneficio de DD
+  vol_sizing: true              # tamaño inverso a volatilidad (ATR) — controla el DD
+  target_atr_pct: 0.02          # ATR diario objetivo para el sizing (2%)
 
 # ── AGENTES LLM ──────────────────────────────────────
 llm:
@@ -75,3 +107,6 @@ backtesting:
   commission: 0.001
   rebalance_day: 0              # 0 = lunes (isoweekday - 1)
   walk_forward_split: "2022-01-01"  # in-sample hasta aquí, out-of-sample después
+  walk_forward_folds: 5         # nº de ventanas para robustez (mediana de Sharpe)
+  slippage: 0.0005              # deslizamiento por operación (5 bps) — realismo de fills
+  execute_next_open: true       # ejecutar al open del día siguiente (evita look-ahead intradía)

@@ -39,4 +39,10 @@ def register_pipelines() -> dict[str, Pipeline]:
     }
     pipelines["signals"] = sum(signals_pipelines.values())
 
+    # ── PRODUCCIÓN: estrategia TSMOM long/short (ingesta → pesos → órdenes) ──
+    # Pipeline autocontenido recomendado para operar. Solo necesita ingestión
+    # (descarga del universo) + el módulo tsmom. No usa LLM/Polymarket/legacy.
+    if "ingestion" in pipelines and "tsmom" in pipelines:
+        pipelines["tsmom_live"] = pipelines["ingestion"] + pipelines["tsmom"]
+
     return pipelines

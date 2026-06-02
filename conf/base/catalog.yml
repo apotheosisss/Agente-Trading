@@ -130,6 +130,41 @@ poly_report:
   type: text.TextDataset
   filepath: data/08_reporting/poly_report.txt
 
+# Histórico acumulado de señales Polymarket (para backtest futuro)
+polymarket_history:
+  type: pandas.ParquetDataset
+  filepath: data/01_raw/polymarket_history.parquet
+
+# ── TSMOM (estrategia de producción long/short) ──────
+tsmom_weights:
+  type: pandas.CSVDataset
+  filepath: data/07_model_output/tsmom_weights.csv
+  save_args:
+    encoding: utf-8
+  load_args:
+    encoding: utf-8
+
+tsmom_report:
+  type: text.TextDataset
+  filepath: data/08_reporting/tsmom_report.txt
+
+tsmom_orders:
+  type: pandas.CSVDataset
+  filepath: data/07_model_output/tsmom_orders.csv
+  versioned: true
+  save_args:
+    encoding: utf-8
+  load_args:
+    encoding: utf-8
+
+tsmom_validation:
+  type: pandas.CSVDataset
+  filepath: data/08_reporting/tsmom_validation.csv
+  save_args:
+    encoding: utf-8
+  load_args:
+    encoding: utf-8
+
 # ── EXECUTION ────────────────────────────────────────
 execution_record:
   type: pandas.CSVDataset
