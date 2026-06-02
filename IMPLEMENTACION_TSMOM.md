@@ -50,17 +50,39 @@ Config validada por defecto. Para ajustar (con cuidado, revalidando):
 `tsmom_validation.csv`: FULL Sharpe **0.84**, CAGR 11.6%, MaxDD -25% | OOS Sharpe **0.68**.
 Coincide con la investigación → el port a producción es fiel.
 
-## PENDIENTE antes de operar con dinero real (NO omitir)
+## Ejecución en Alpaca (paper) — YA IMPLEMENTADA
 
-1. **Adaptador de ejecución Alpaca long/short.** `tsmom_orders` da la posición OBJETIVO.
-   Falta un nodo que lea la posición ACTUAL en Alpaca y envíe la orden delta
-   (objetivo − actual), soportando cortos (o ETFs inversos donde no haya borrow).
-   ⚠️ El pipeline `alpaca` existente es **long-only y NO es compatible** — no usarlo con TSMOM.
-2. **Validación de robustez:** walk-forward purgado, costes pesimistas (borrow/financiación
-   reales), test de universo perturbado.
-3. **Paper trading 60-90 días** midiendo *tracking error* vs backtest antes de capital real.
-4. **Apalancamiento:** el blend recomendado es 50/50 con SPY a 1.0–1.3×. Dimensionar con
-   cuidado (margin/gap). El stream TSMOM solo es el overlay.
+Adaptador long/short por **órdenes delta** (lleva la cuenta de la posición actual a
+la objetivo). Pipeline `alpaca_tsmom` / `tsmom_trade`:
+
+```bash
+# Calcular señales Y ejecutar en Alpaca paper (ingestión + tsmom + ejecución)
+uv run kedro run --pipeline tsmom_trade
+
+# Solo ejecutar (con tsmom_weights ya calculado)
+uv run kedro run --pipeline alpaca_tsmom
+```
+
+- `nodes.ejecutar_tsmom_alpaca`: para cada activo calcula posición objetivo USD
+  (`equity * peso`), normaliza a exposición bruta segura, y envía la orden delta
+  (BUY/SELL/CLOSE) hacia el objetivo. Soporta **largos y cortos** (cripto solo largo).
+- Salida: `data/07_model_output/tsmom_alpaca_log.csv`.
+- **Seguridad:** paper salvo `paper_trading:false` explícito; `live_gross=1.0`
+  (sin apalancamiento por defecto); cap por posición `live_max_position_pct=0.30`;
+  órdenes < `min_order_usd` ($25) omitidas; cada orden en try/except aislado.
+- Config en `parameters.yml → tsmom:` (`live_gross`, `live_max_position_pct`, `min_order_usd`).
+
+⚠️ El pipeline `alpaca` viejo (long-only) sigue existiendo pero **no debe usarse** con TSMOM.
+
+## PENDIENTE antes de subir apalancamiento / dinero real (NO omitir)
+
+1. **Verificar en paper:** correr `tsmom_trade` unos días y revisar `tsmom_alpaca_log.csv`
+   y las posiciones (algunos ETFs pueden no ser shortables en paper → la orden se
+   registra como error y se continúa; revisar cuáles).
+2. **Validación de robustez:** walk-forward purgado, costes pesimistas (borrow/financiación).
+3. **Paper trading 60-90 días** midiendo *tracking error* vs backtest.
+4. **Apalancamiento:** subir `live_gross` (p.ej. 1.3-1.5) solo tras validar; dimensionar
+   con cuidado (margin/gap). El blend recomendado es 50/50 con SPY.
 
 ## Congelado (no aporta alfa, confirmado)
 LLM, TradingAgents y Polymarket quedan fuera de la ruta de producción TSMOM.

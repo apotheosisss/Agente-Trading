@@ -5,7 +5,7 @@ from kedro.framework.project import find_pipelines
 from kedro.pipeline import Pipeline
 
 # Pipelines excluidos del run completo por defecto (requieren configuracion especial)
-_OPTIONAL_PIPELINES = {"alpaca"}
+_OPTIONAL_PIPELINES = {"alpaca", "alpaca_tsmom"}
 
 # Pipelines que NO forman parte del pipeline de señales en vivo
 _BACKTEST_PIPELINES = {"backtesting"}
@@ -44,5 +44,10 @@ def register_pipelines() -> dict[str, Pipeline]:
     # (descarga del universo) + el módulo tsmom. No usa LLM/Polymarket/legacy.
     if "ingestion" in pipelines and "tsmom" in pipelines:
         pipelines["tsmom_live"] = pipelines["ingestion"] + pipelines["tsmom"]
+        # tsmom_trade: calcula señales Y ejecuta en Alpaca (paper). Invocar a mano.
+        if "alpaca_tsmom" in pipelines:
+            pipelines["tsmom_trade"] = (
+                pipelines["ingestion"] + pipelines["tsmom"] + pipelines["alpaca_tsmom"]
+            )
 
     return pipelines

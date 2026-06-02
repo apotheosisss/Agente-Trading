@@ -315,6 +315,159 @@ def ejecutar_ordenes_alpaca(
     return pd.DataFrame(records)
 
 
+def _to_alpaca_symbol(ticker: str) -> tuple[str, bool]:
+    """yfinance -> símbolo Alpaca. Devuelve (símbolo, es_cripto)."""
+    if ticker.endswith("-USD"):
+        return ticker.replace("-USD", "/USD"), True
+    return ticker, False
+
+
+def ejecutar_tsmom_alpaca(
+    tsmom_weights: pd.DataFrame,
+    account_state: pd.DataFrame,
+    parameters: dict,
+) -> pd.DataFrame:
+    """Ejecuta la estrategia TSMOM long/short en Alpaca mediante órdenes DELTA.
+
+    Para cada activo calcula la posición objetivo en USD (equity * peso, normalizado
+    a una exposición bruta segura) y envía la orden necesaria para pasar de la
+    posición ACTUAL a la OBJETIVO. Soporta largos y cortos.
+
+    Seguridad:
+    - Siempre paper salvo paper_trading:false explícito (heredado de _get_alpaca_client).
+    - Exposición bruta objetivo configurable (``tsmom.live_gross``, def. 1.0 = sin
+      apalancamiento) para empezar conservador en paper.
+    - Cap por posición (``tsmom.live_max_position_pct``, def. 0.30).
+    - Órdenes por debajo de ``tsmom.min_order_usd`` (def. $25) se omiten.
+    - Cripto no admite corto en Alpaca: si el peso es negativo, se cierra a 0.
+    - Cada orden va en su propio try/except: un fallo no detiene el resto.
+    """
+    ts = datetime.now(timezone.utc).isoformat()
+    cfg = parameters.get("tsmom", {})
+    live_gross = float(cfg.get("live_gross", 1.0))
+    max_pos_pct = float(cfg.get("live_max_position_pct", 0.30))
+    min_order = float(cfg.get("min_order_usd", 25.0))
+
+    records: list[dict] = []
+
+    try:
+        from alpaca.trading.requests import MarketOrderRequest
+        from alpaca.trading.enums import OrderSide, TimeInForce
+
+        client, paper = _get_alpaca_client()
+        mode = "paper" if paper else "live"
+        equity = float(account_state["equity_usd"].iloc[0])
+        if equity <= 0:
+            logger.error("Equity no disponible (%.2f) — abortando ejecución TSMOM", equity)
+            return pd.DataFrame([{
+                "timestamp": ts, "ticker": "", "side": "ABORT",
+                "target_usd": 0.0, "delta_usd": 0.0, "status": "no_equity",
+                "message": "account_state sin equity", "mode": mode,
+            }])
+
+        # ── Normalizar pesos a exposición bruta segura y cap por posición ────
+        w = tsmom_weights.set_index("ticker")["target_weight"].astype(float)
+        gross_raw = w.abs().sum()
+        scale = (live_gross / gross_raw) if gross_raw > 0 else 0.0
+        w = (w * scale).clip(-max_pos_pct, max_pos_pct)
+        target_usd = (w * equity)
+
+        # ── Posiciones actuales (market_value firmado) ───────────────────────
+        cur_val: dict[str, float] = {}
+        for p in client.get_all_positions():
+            sym = str(p.symbol)               # p.ej. "AAPL" o "BTC/USD"
+            yf = sym.replace("/USD", "-USD") if "/USD" in sym else sym
+            cur_val[yf] = float(p.market_value)  # negativo si corto
+
+        symbols = set(target_usd.index) | set(cur_val.keys())
+        logger.info(
+            "TSMOM Alpaca [%s]: equity=$%.0f | bruto objetivo=%.2fx | %d símbolos",
+            mode, equity, live_gross, len(symbols),
+        )
+
+        for yf_sym in sorted(symbols):
+            alpaca_sym, is_crypto = _to_alpaca_symbol(yf_sym)
+            desired = float(target_usd.get(yf_sym, 0.0))
+            if is_crypto and desired < 0:
+                desired = 0.0   # sin cortos en cripto
+            current = float(cur_val.get(yf_sym, 0.0))
+
+            flip = (current != 0.0) and (desired * current < 0)
+            tif = TimeInForce.GTC if is_crypto else TimeInForce.DAY
+
+            try:
+                # Caso 1: cambio de signo (de largo a corto o viceversa) → cerrar primero
+                if flip:
+                    client.close_position(alpaca_sym)
+                    records.append({
+                        "timestamp": ts, "ticker": yf_sym, "side": "CLOSE",
+                        "target_usd": round(desired, 2), "delta_usd": round(-current, 2),
+                        "status": "submitted", "message": "cierre previo a flip", "mode": mode,
+                    })
+                    current = 0.0
+
+                # Caso 2: objetivo ~0 y hay posición → cerrar
+                if abs(desired) < min_order and abs(current) >= min_order and not flip:
+                    client.close_position(alpaca_sym)
+                    records.append({
+                        "timestamp": ts, "ticker": yf_sym, "side": "CLOSE",
+                        "target_usd": 0.0, "delta_usd": round(-current, 2),
+                        "status": "submitted", "message": "objetivo cero", "mode": mode,
+                    })
+                    continue
+
+                delta = desired - current
+                if abs(delta) < min_order:
+                    records.append({
+                        "timestamp": ts, "ticker": yf_sym, "side": "HOLD",
+                        "target_usd": round(desired, 2), "delta_usd": round(delta, 2),
+                        "status": "skipped", "message": "delta < min_order", "mode": mode,
+                    })
+                    continue
+
+                side = OrderSide.BUY if delta > 0 else OrderSide.SELL
+                order = client.submit_order(MarketOrderRequest(
+                    symbol=alpaca_sym,
+                    notional=round(abs(delta), 2),
+                    side=side,
+                    time_in_force=tif,
+                ))
+                logger.info(
+                    "[%s] %s %s: $%.2f (objetivo $%.0f) id=%s",
+                    mode, side.value.upper(), yf_sym, abs(delta), desired, order.id,
+                )
+                records.append({
+                    "timestamp": ts, "ticker": yf_sym, "side": side.value.upper(),
+                    "target_usd": round(desired, 2), "delta_usd": round(delta, 2),
+                    "status": "submitted", "message": f"order_id={order.id}", "mode": mode,
+                })
+            except Exception as exc:
+                logger.error("Orden TSMOM %s falló: %s", yf_sym, exc)
+                records.append({
+                    "timestamp": ts, "ticker": yf_sym, "side": "ERROR",
+                    "target_usd": round(desired, 2), "delta_usd": 0.0,
+                    "status": "error", "message": str(exc), "mode": mode,
+                })
+
+    except ImportError:
+        logger.warning("alpaca-py no instalado — instala con: pip install alpaca-py")
+        records.append({
+            "timestamp": ts, "ticker": "", "side": "HOLD", "target_usd": 0.0,
+            "delta_usd": 0.0, "status": "simulated", "message": "alpaca-py no disponible",
+            "mode": "paper_sim",
+        })
+    except Exception as exc:
+        logger.error("Error en ejecución TSMOM Alpaca: %s", exc)
+        records.append({
+            "timestamp": ts, "ticker": "", "side": "ERROR", "target_usd": 0.0,
+            "delta_usd": 0.0, "status": "error", "message": str(exc), "mode": "unknown",
+        })
+
+    n_sub = sum(1 for r in records if r["status"] == "submitted")
+    logger.info("TSMOM Alpaca: %d órdenes enviadas | %d registros", n_sub, len(records))
+    return pd.DataFrame(records)
+
+
 def sincronizar_posiciones_alpaca() -> pd.DataFrame:
     """Obtiene las posiciones abiertas actuales de la cuenta Alpaca.
 
