@@ -165,6 +165,15 @@ tsmom_validation:
   load_args:
     encoding: utf-8
 
+tsmom_alpaca_log:
+  type: pandas.CSVDataset
+  filepath: data/07_model_output/tsmom_alpaca_log.csv
+  versioned: true
+  save_args:
+    encoding: utf-8
+  load_args:
+    encoding: utf-8
+
 # ── EXECUTION ────────────────────────────────────────
 execution_record:
   type: pandas.CSVDataset

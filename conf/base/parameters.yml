@@ -46,6 +46,10 @@ tsmom:
   notrade: 0.0
   rev_w: 0.2                  # sleeve de reversión/value (peso disciplinado)
   rev_lb: 504                 # lookback reversión (~2 años)
+  # ── Ejecución en vivo (Alpaca paper) ──
+  live_gross: 1.0             # exposición bruta objetivo en vivo (1.0 = sin apalancamiento)
+  live_max_position_pct: 0.30 # cap por posición (|peso| máximo en vivo)
+  min_order_usd: 25.0         # órdenes menores se omiten
 
 # ── ESTRATEGIA DE SEÑAL (legacy, congelada) ───────────
 signal_strategy: "dual_mom"
