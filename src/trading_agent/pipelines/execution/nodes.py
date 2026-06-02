@@ -75,7 +75,12 @@ def enviar_orden(risk_result: dict, signal_df: pd.DataFrame, parameters: dict) -
             ]
         )
 
-    approved_tickers = risk_result["approved_tickers"]
+    # FIX (auditoría): limitar al top-N por score, igual que el backtest
+    # (target = top max_positions). Antes se ejecutaban TODAS las señales BUY
+    # aprobadas (p.ej. 9 × $5000 = $45k sobre $10k de capital), incoherente con
+    # la concentración top-2 que se valida en el backtest. signal_df viene
+    # ordenado por score descendente desde agente_decision.
+    approved_tickers = risk_result["approved_tickers"][:max_positions]
     max_position_pct = float(risk_result.get("max_position_pct", 0.33))
     # Cada posición recibe 1/max_positions del capital total
     order_size = initial_capital / max_positions

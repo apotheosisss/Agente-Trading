@@ -106,33 +106,97 @@ _KEYWORD_CATEGORIES: list[dict[str, Any]] = [
         "tickers": ["AAPL", "NVDA", "XLK", "SPY", "QQQ"],
         "weight": 0.9,
     },
+    # ── Específicos por empresa (mercados que nombran a la compañía) ─────────────
+    # Polymarket lista bastantes mercados "Will <empresa> reach $X / hit ATH...".
+    # YES alto en un objetivo de precio al alza = bullish para ese ticker.
+    {
+        "name": "nvidia_target",
+        "keywords": ["nvidia", "nvda"],
+        "direction": "bullish",
+        "tickers": ["NVDA", "SOXX", "XLK"],
+        "weight": 1.0,
+    },
+    {
+        "name": "apple_target",
+        "keywords": ["apple ", "aapl"],
+        "direction": "bullish",
+        "tickers": ["AAPL"],
+        "weight": 1.0,
+    },
+    {
+        "name": "tesla_microstrategy_crypto_proxy",
+        # MicroStrategy/empresas-tesorería de BTC: proxy de sentimiento cripto.
+        "keywords": ["microstrategy", "mstr", "strategy sells bitcoin"],
+        "direction": "bullish",
+        "tickers": ["BTC-USD", "ETH-USD"],
+        "weight": 0.8,
+    },
+    {
+        "name": "oil_price",
+        # "Will oil/WTI hit $X" alto = bullish energía.
+        "keywords": ["oil hit $", "wti above", "crude oil above", "oil price above"],
+        "direction": "bullish",
+        "tickers": ["CVX", "SLB", "HAL", "VLO", "OXY", "XLE"],
+        "weight": 1.0,
+    },
+    {
+        "name": "venezuela",
+        # Apertura/licencias Venezuela → bullish para energía con exposición.
+        "keywords": ["venezuela", "maduro"],
+        "direction": "bullish",
+        "tickers": ["CVX", "SLB", "HAL", "XLE"],
+        "weight": 0.8,
+    },
 ]
 
 
 # Helpers
 
-def _fetch_markets(base_url: str, min_volume: float) -> list[dict]:
+def _fetch_markets(base_url: str, min_volume: float, max_markets: int = 500) -> list[dict]:
     """Descarga los mercados activos desde la API de Polymarket.
+
+    FIX (auditoría): la versión anterior pedía ``limit=1000`` pero la API
+    ignora el limit y devuelve solo ~100 mercados SIN ordenar — dominados por
+    novelty/deportes ("Rihanna album before GTA VI", NHL...), casi ninguno
+    financiero → 0 coincidencias de keywords. Ahora:
+      - Ordena por ``volumeNum`` descendente (aflora los mercados líquidos
+        de finanzas/macro/cripto, que son los relevantes para trading).
+      - Pagina con ``offset`` hasta ``max_markets``.
 
     Devuelve lista vacia si la API no esta disponible (fail-safe).
     """
     try:
         import requests
 
-        resp = requests.get(
-            f"{base_url}/markets",
-            params={"active": "true", "closed": "false", "limit": 1000},
-            timeout=15,
-        )
-        resp.raise_for_status()
-        markets = resp.json()
+        markets: list[dict] = []
+        page = 100  # tope efectivo por respuesta de la API
+        for offset in range(0, max_markets, page):
+            resp = requests.get(
+                f"{base_url}/markets",
+                params={
+                    "active": "true",
+                    "closed": "false",
+                    "order": "volumeNum",
+                    "ascending": "false",
+                    "limit": page,
+                    "offset": offset,
+                },
+                timeout=15,
+            )
+            resp.raise_for_status()
+            batch = resp.json()
+            if not isinstance(batch, list) or not batch:
+                break
+            markets.extend(batch)
+            if len(batch) < page:
+                break
 
         filtered = [
             m for m in markets
-            if float(m.get("volume", 0) or 0) >= min_volume
+            if float(m.get("volumeNum", m.get("volume", 0)) or 0) >= min_volume
         ]
         logger.info(
-            "Polymarket: %d mercados totales | %d con volumen > $%,.0f",
+            "Polymarket: %d mercados descargados | %d con volumen >= $%.0f",
             len(markets), len(filtered), min_volume,
         )
         return filtered
@@ -287,6 +351,47 @@ def obtener_seniales_polymarket(parameters: dict) -> pd.DataFrame:
 
 # Alias para compatibilidad con pipeline.py (nombre con tilde en funcion original)
 obtener_seniales_polymarket.__name__ = "obtener_seniales_polymarket"
+
+
+def persistir_historico_polymarket(
+    poly_signals: pd.DataFrame, parameters: dict
+) -> pd.DataFrame:
+    """Acumula los snapshots diarios de poly_score en un histórico persistente.
+
+    MOTIVO (auditoría): Polymarket no era backtesteable porque la Gamma API solo
+    expone mercados ACTIVOS — no la serie histórica de probabilidades. Sin
+    histórico, es imposible medir si la señal aporta alfa. Este nodo construye ese
+    histórico hacia adelante: cada corrida diaria añade una fila por ticker con la
+    fecha. Tras semanas/meses de acumulación, el backtest podrá consumir
+    ``data/01_raw/polymarket_history.parquet`` y la ablación A/B/C será real.
+
+    Idempotente: si ya existe el snapshot de hoy, lo reemplaza.
+    """
+    from pathlib import Path
+
+    hist_path = Path("data/01_raw/polymarket_history.parquet")
+    today = pd.Timestamp(datetime.now(timezone.utc).date())
+
+    snap = poly_signals.copy()
+    snap["date"] = today
+
+    if hist_path.exists():
+        try:
+            hist = pd.read_parquet(hist_path)
+            hist = hist[hist["date"] != today]
+            combined = pd.concat([hist, snap], ignore_index=True)
+        except Exception as exc:
+            logger.warning("No se pudo leer histórico Polymarket (%s) — recreando", exc)
+            combined = snap
+    else:
+        combined = snap
+
+    n_days = combined["date"].nunique()
+    logger.info(
+        "Histórico Polymarket: %d filas | %d días acumulados (desde %s)",
+        len(combined), n_days, combined["date"].min().date(),
+    )
+    return combined
 
 
 def generar_reporte_polymarket(poly_signals: pd.DataFrame) -> str:

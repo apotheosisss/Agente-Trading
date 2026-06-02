@@ -1,10 +1,98 @@
 # src/trading_agent/pipelines/shared_utils.py
 """Utilidades compartidas entre pipelines de backtesting y llm_agents."""
 
+import numpy as np
 import pandas as pd
 
 
 MAX_SCORE = 9.0  # momentum_90d(3) + EMA(2) + MACD(1) + RSI(1.5) + momentum_252d_bonus(1) + sentiment(0.5)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# FASE B — Motor de señal limpio, cross-sectional y configurable
+# ─────────────────────────────────────────────────────────────────────────────
+# Reemplaza los ~10 umbrales hardcodeados de score_row (máquina de overfit) por
+# señales continuas, normalizadas por volatilidad y por z-score cross-sectional.
+# Se selecciona por parámetro `signal_strategy`. Cada estrategia es UNA hipótesis
+# a falsar en walk-forward vs SPY OOS.
+#
+# Convención: devuelve dict {ticker: score}. El backtest toma top-N con
+# score >= min_entry_score. Un ticker excluido por filtro de tendencia NO aparece.
+
+def _zscore(values: dict[str, float]) -> dict[str, float]:
+    """Z-score cross-sectional (entre tickers del mismo día). Robusto a n pequeño."""
+    if not values:
+        return {}
+    arr = np.array(list(values.values()), dtype=float)
+    mu = float(np.nanmean(arr))
+    sd = float(np.nanstd(arr))
+    if sd <= 1e-9:
+        return {k: 0.0 for k in values}
+    return {k: (v - mu) / sd for k, v in values.items()}
+
+
+def compute_scores(today: pd.DataFrame, strategy: str = "legacy") -> dict[str, float]:
+    """Calcula scores cross-sectional para todos los tickers de UNA fecha.
+
+    Estrategias (hipótesis):
+      - ``legacy``      : score_row original (baseline para comparar).
+      - ``mom_vol``     : momentum 90d ajustado por volatilidad (ATR%), z-score.
+                          Filtro de tendencia close>EMA200. La versión "limpia"
+                          del momentum: una sola idea, sin buckets.
+      - ``dual_mom``    : momentum relativo (90d/vol) PERO exige momentum absoluto
+                          252d>0 (si no, excluido → a cash). Anti-bear.
+      - ``trend``       : distancia a EMA200 ajustada por vol (trend-following puro).
+      - ``meanrev``     : reversión: comprar RSI bajo DENTRO de tendencia alcista.
+    """
+    rows = {str(r["ticker"]): r for _, r in today.iterrows()}
+
+    if strategy == "legacy":
+        out = {}
+        for t, r in rows.items():
+            s = score_row(r)
+            if s > -999.0:
+                out[t] = s
+        return out
+
+    raw: dict[str, float] = {}
+    for t, r in rows.items():
+        close = float(r["close"])
+        ema200 = float(r.get("ema_200", r.get("ema_50", close)))
+        atr = float(r.get("atr", 0.0))
+        atr_pct = (atr / close) if close > 0 else 0.0
+        mom90 = float(r.get("momentum_90d", 0.0))
+        mom252 = float(r.get("momentum_252d", 0.0))
+        rsi = float(r.get("rsi", 50.0))
+
+        # Filtro de tendencia común (salvo mean-reversion que lo usa distinto)
+        uptrend = close > ema200
+
+        if strategy == "mom_vol":
+            if not uptrend or atr_pct <= 0:
+                continue
+            raw[t] = mom90 / atr_pct
+
+        elif strategy == "dual_mom":
+            # Momentum absoluto: el año debe ser positivo (si no, a cash).
+            if not uptrend or mom252 <= 0 or atr_pct <= 0:
+                continue
+            raw[t] = mom90 / atr_pct
+
+        elif strategy == "trend":
+            if not uptrend or atr_pct <= 0:
+                continue
+            raw[t] = (close / ema200 - 1.0) / atr_pct
+
+        elif strategy == "meanrev":
+            # Comprar sobreventa dentro de tendencia alcista (RSI bajo = mejor).
+            if not uptrend:
+                continue
+            raw[t] = (50.0 - rsi)  # RSI 30 → +20; RSI 70 → -20
+
+        else:
+            raise ValueError(f"signal_strategy desconocida: {strategy}")
+
+    return _zscore(raw)
 
 
 def score_row(row: pd.Series) -> float:

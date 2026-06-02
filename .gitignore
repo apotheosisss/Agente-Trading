@@ -161,3 +161,6 @@ venv.bak/
 # mlflow local runs
 mlruns/*
 conf/local/
+
+# Artefactos de barridos/experimentos
+sweep_output.txt

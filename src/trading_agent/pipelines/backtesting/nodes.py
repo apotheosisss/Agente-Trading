@@ -5,7 +5,7 @@ import logging
 import numpy as np
 import pandas as pd
 
-from trading_agent.pipelines.shared_utils import score_row
+from trading_agent.pipelines.shared_utils import compute_scores, score_row
 
 logger = logging.getLogger(__name__)
 
@@ -44,16 +44,69 @@ def ejecutar_backtest(
     bt = parameters["backtesting"]
     initial_capital = float(bt["initial_capital"])
     commission = float(bt["commission"])
+    slippage = float(bt.get("slippage", 0.0))
+    execute_next_open = bool(bt.get("execute_next_open", False))
+    # Coste total por lado de operación: comisión + deslizamiento.
+    cost = commission + slippage
     max_positions = int(parameters["risk"]["max_positions"])
     stop_loss_atr_mult = float(parameters["risk"]["stop_loss_atr_mult"])
     rebalance_dow      = int(bt.get("rebalance_day", 0))
     rebalance_interval = int(bt.get("rebalance_interval", 0))  # 0 = usar rebalance_dow
 
+    # ── Integración Polymarket (opcional, para ablation A/B/C) ────────────────
+    # use_polymarket=false → estrategia base (variante B).
+    # use_polymarket=true  → suma poly_score histórico por (fecha,ticker) (var. A).
+    # polymarket_shuffle=true → baraja los poly_score (variante C: ¿es ruido?).
+    use_poly = bool(bt.get("use_polymarket", False))
+    poly_shuffle = bool(bt.get("polymarket_shuffle", False))
+    poly_lookup: dict = {}
+    poly_overlap_days = 0
+    if use_poly:
+        from pathlib import Path
+        _p = Path("data/01_raw/polymarket_history.parquet")
+        if _p.exists():
+            _ph = pd.read_parquet(_p)
+            if poly_shuffle and not _ph.empty:
+                _ph = _ph.copy()
+                _ph["poly_score"] = (
+                    _ph["poly_score"].sample(frac=1.0, random_state=42).to_numpy()
+                )
+            _bt_dates = {pd.Timestamp(d).normalize() for d in feature_vector.index.unique()}
+            for _, r in _ph.iterrows():
+                d = pd.Timestamp(r["date"]).normalize()
+                poly_lookup[(d, str(r["ticker"]))] = float(r["poly_score"])
+                if d in _bt_dates:
+                    poly_overlap_days += 1
+        logger.info(
+            "Backtest Polymarket: use=%s shuffle=%s | %d filas históricas | "
+            "%d con solape en ventana de backtest",
+            use_poly, poly_shuffle, len(poly_lookup), poly_overlap_days,
+        )
+
+    # ── Estrategia de señal (Fase B) ──────────────────────────────────────────
+    signal_strategy = str(parameters.get("signal_strategy", "legacy"))
+
     risk = parameters["risk"]
     min_entry_score = float(risk.get("min_entry_score", 1.5))
+    # Las estrategias nuevas devuelven z-scores (~N(0,1)); el umbral legacy (2.0)
+    # no aplica. Usar signal_min_score (en desviaciones estándar; 0 = sobre la media).
+    if signal_strategy != "legacy":
+        min_entry_score = float(parameters.get("signal_min_score", 0.0))
     circuit_pct = float(risk.get("max_drawdown_circuit", 0.12))
     cooldown_total = int(risk.get("circuit_break_cooldown", 21))
     vix_crisis = float(risk.get("vix_crisis_threshold", 40))
+    # ── Fase A: re-armado por RÉGIMEN de mercado (no por equity) ──────────────
+    # El circuit breaker liquida en caídas, pero la re-entrada NO se decide por
+    # la recuperación del portfolio (que en cash nunca llega), sino por el régimen
+    # de mercado: re-entra cuando el ticker de referencia vuelve por encima de su
+    # EMA-200. Esto evita (a) componer caídas re-entrando 25% más abajo cada vez
+    # y (b) perderse la recuperación quedándose en cash para siempre.
+    circuit_rearm_regime = bool(risk.get("circuit_rearm_regime", True))
+    regime_ticker = str(risk.get("regime_ticker", "SPY"))
+    # ── Trailing stop (Fase A) ────────────────────────────────────────────────
+    trailing_stop = bool(risk.get("trailing_stop", False))
+    # ── Sizing por volatilidad (Fase A) ───────────────────────────────────────
+    vol_sizing = bool(risk.get("vol_sizing", False))
 
     # ── Preparar serie VIX ────────────────────────────────────────────────────
     if not vix_data.empty and "vix" in vix_data.columns:
@@ -74,8 +127,21 @@ def ejecutar_backtest(
     open_positions: dict = {}   # {ticker: {shares, entry_price, stop_loss}}
     peak_equity = initial_capital
     cooldown_remaining = 0      # días de espera tras circuit breaker
+    circuit_active = False      # True = liquidado, esperando re-armado por régimen
     daily_records = []
     days_since_rebalance = 0
+
+    # ── Realismo de ejecución: open del día SIGUIENTE por ticker ──────────────
+    # La señal se calcula con el cierre del día D; la orden se ejecuta a la
+    # apertura del día D+1. Evita el look-ahead de operar al mismo cierre que
+    # generó la señal. shift(-1) dentro de cada ticker (frame ordenado por fecha).
+    feature_vector = feature_vector.sort_index().copy()
+    if execute_next_open and "open" in feature_vector.columns:
+        feature_vector["_next_open"] = (
+            feature_vector.groupby("ticker")["open"].shift(-1)
+        )
+    else:
+        feature_vector["_next_open"] = np.nan
 
     dates = sorted(feature_vector.index.unique())
 
@@ -84,10 +150,26 @@ def ejecutar_backtest(
 
         price_map: dict[str, float] = {}
         atr_map: dict[str, float] = {}
+        fill_map: dict[str, float] = {}   # precio de ejecución (next-open o close)
+        regime_close = None
+        regime_ema200 = None
         for _, row in today.iterrows():
             t = str(row["ticker"])
-            price_map[t] = float(row["close"])
+            close = float(row["close"])
+            price_map[t] = close
             atr_map[t] = float(row["atr"])
+            nxt = row.get("_next_open", np.nan)
+            fill_map[t] = float(nxt) if (execute_next_open and pd.notna(nxt) and nxt > 0) else close
+            if t == regime_ticker:
+                regime_close = close
+                regime_ema200 = float(row.get("ema_200", row.get("ema_50", close)))
+
+        # Régimen risk-on: ticker de referencia por encima de su EMA-200.
+        # Si el ticker de régimen no cotiza hoy, se asume risk-on (no bloquea).
+        regime_risk_on = (
+            True if regime_close is None or regime_ema200 is None
+            else regime_close > regime_ema200
+        )
 
         trade_events: list[str] = []
         vix_today = _vix_for(date)
@@ -100,30 +182,31 @@ def ejecutar_backtest(
         equity_pre = cash + pos_value_pre
         peak_equity = max(peak_equity, equity_pre)
 
-        # ── 1. CIRCUIT BREAKER: caída desde pico ─────────────────────────────
+        # ── 1. CIRCUIT BREAKER: caída desde pico (Fase A: sin compounding) ────
+        # El pico se mantiene en el MÁXIMO HISTÓRICO REAL (no se resetea hacia
+        # abajo). Tras liquidar, se entra en `circuit_active` y solo se re-arma
+        # cuando el régimen de mercado vuelve a risk-on (EMA-200), evitando
+        # re-entrar 25% más abajo en cada escalón de un bear prolongado.
         drawdown_from_peak = (equity_pre - peak_equity) / peak_equity  # <= 0
         if drawdown_from_peak <= -circuit_pct and open_positions:
             for ticker, pos in list(open_positions.items()):
                 price = price_map.get(ticker, pos["entry_price"])
-                cash += pos["shares"] * price * (1.0 - commission)
+                cash += pos["shares"] * price * (1.0 - cost)
                 trade_events.append("CIRCUIT_BREAK")
             open_positions.clear()
-            # CRÍTICO: reset del pico al nivel de liquidación.
-            # Sin reset, cada re-entrada seguiría midiendo DD contra el pico
-            # original (2021), causando triggers repetidos en toda la recuperación.
-            peak_equity = equity_pre
+            circuit_active = True
             cooldown_remaining = cooldown_total
             logger.warning(
-                "Circuit breaker activado: DD=%.1f%% | nuevo pico=$%.0f | "
-                "enfriamiento=%d dias",
-                drawdown_from_peak * 100, equity_pre, cooldown_total,
+                "Circuit breaker activado: DD=%.1f%% desde pico $%.0f | "
+                "esperando re-armado por régimen (%s)",
+                drawdown_from_peak * 100, peak_equity, regime_ticker,
             )
 
         # ── 2. VIX CRISIS EXTREMO: liquidar todo ─────────────────────────────
         elif vix_today > vix_crisis and open_positions:
             for ticker, pos in list(open_positions.items()):
                 price = price_map.get(ticker, pos["entry_price"])
-                cash += pos["shares"] * price * (1.0 - commission)
+                cash += pos["shares"] * price * (1.0 - cost)
                 trade_events.append("VIX_LIQUIDATE")
             open_positions.clear()
             logger.warning(
@@ -132,14 +215,25 @@ def ejecutar_backtest(
             )
 
         else:
-            # ── 3. STOP-LOSS DIARIO (fijo en entrada) ────────────────────────
+            # ── 3a. TRAILING STOP: el stop sube con el precio, nunca baja ─────
+            if trailing_stop:
+                for ticker, pos in open_positions.items():
+                    price = price_map.get(ticker)
+                    if price is None:
+                        continue
+                    atr = atr_map.get(ticker, 0.0)
+                    new_stop = price - atr * stop_loss_atr_mult
+                    if new_stop > pos["stop_loss"]:
+                        pos["stop_loss"] = new_stop
+
+            # ── 3b. STOP-LOSS DIARIO ─────────────────────────────────────────
             stopped: list[str] = []
             for ticker, pos in open_positions.items():
                 price = price_map.get(ticker)
                 if price is None:
                     continue
                 if price <= pos["stop_loss"]:
-                    cash += pos["shares"] * price * (1.0 - commission)
+                    cash += pos["shares"] * price * (1.0 - cost)
                     stopped.append(ticker)
                     trade_events.append("STOP_LOSS")
                     logger.debug(
@@ -149,11 +243,25 @@ def ejecutar_backtest(
             for t in stopped:
                 del open_positions[t]
 
-        # ── Gestionar cooldown ────────────────────────────────────────────────
+        # ── Gestionar cooldown y re-armado por régimen ────────────────────────
         if cooldown_remaining > 0:
             cooldown_remaining -= 1
 
         in_cooldown = cooldown_remaining > 0
+
+        # Re-armado: salir de circuit_active cuando termina el cooldown Y el
+        # mercado vuelve a risk-on. Reseteamos el pico al equity actual: como
+        # evitamos la caída quedándonos en cash, empezamos una "campaña nueva"
+        # desde un régimen sano (sin esto, el viejo pico re-dispararía al instante).
+        if circuit_active and not in_cooldown and (
+            not circuit_rearm_regime or regime_risk_on
+        ):
+            circuit_active = False
+            peak_equity = equity_pre
+            logger.info(
+                "Circuit re-armado (régimen %s risk-on). Pico reiniciado a $%.0f",
+                regime_ticker, equity_pre,
+            )
 
         # ── 4. REBALANCEO ────────────────────────────────────────────────────────
         days_since_rebalance += 1
@@ -164,12 +272,12 @@ def ejecutar_backtest(
         else:
             do_rebalance = (date.isoweekday() == rebalance_dow + 1)
         if do_rebalance:
-            # Score con filtro de score mínimo para nuevas entradas
-            scores: dict[str, float] = {}
-            for _, row in today.iterrows():
-                s = score_row(row)
-                if s > -999.0:          # pasa filtro EMA-200
-                    scores[str(row["ticker"])] = s
+            # Score cross-sectional según la estrategia de señal seleccionada.
+            date_norm = pd.Timestamp(date).normalize()
+            scores: dict[str, float] = compute_scores(today, signal_strategy)
+            if use_poly:
+                for ticker_s in list(scores.keys()):
+                    scores[ticker_s] += poly_lookup.get((date_norm, ticker_s), 0.0)
 
             # Solo los top-N con score MÍNIMO (filtro de condición de mercado)
             qualified = {t: s for t, s in scores.items() if s >= min_entry_score}
@@ -181,32 +289,40 @@ def ejecutar_backtest(
             to_sell = [t for t in list(open_positions.keys()) if t not in target]
             for ticker in to_sell:
                 pos = open_positions.pop(ticker)
-                price = price_map.get(ticker, pos["entry_price"])
-                cash += pos["shares"] * price * (1.0 - commission)
+                price = fill_map.get(ticker, price_map.get(ticker, pos["entry_price"]))
+                cash += pos["shares"] * price * (1.0 - cost)
                 trade_events.append("SELL")
 
-            # Comprar solo si no estamos en cooldown NI en crisis VIX
-            if not in_cooldown and vix_today <= vix_crisis and target:
+            # Comprar solo si no hay circuit activo, ni cooldown, ni crisis VIX
+            if not circuit_active and not in_cooldown and vix_today <= vix_crisis and target:
                 pos_value = sum(
                     open_positions[t]["shares"]
                     * price_map.get(t, open_positions[t]["entry_price"])
                     for t in open_positions
                 )
                 total_value = cash + pos_value
-                alloc = total_value / max_positions  # peso igualitario
+                alloc = total_value / max_positions  # peso igualitario base
+                target_atr_pct = float(risk.get("target_atr_pct", 0.02))
 
                 new_buys = [t for t in target if t not in open_positions]
                 for ticker in new_buys:
-                    price = price_map.get(ticker)
+                    price = fill_map.get(ticker, price_map.get(ticker))
                     atr = atr_map.get(ticker, 0.0)
                     if not price or price <= 0.0:
                         continue
-                    budget = min(alloc, cash)
+                    alloc_i = alloc
+                    if vol_sizing and atr > 0:
+                        # Escalar inverso a volatilidad: menos tamaño a más ATR%.
+                        # Clip [0.3, 1.0] → nunca apalanca por encima del peso igual.
+                        atr_pct = atr / price
+                        scale = min(1.0, max(0.3, target_atr_pct / atr_pct))
+                        alloc_i = alloc * scale
+                    budget = min(alloc_i, cash)
                     if budget <= 0.0:
                         continue
-                    shares = budget * (1.0 - commission) / price
+                    shares = budget * (1.0 - cost) / price
                     stop_price = price - atr * stop_loss_atr_mult
-                    cash -= shares * price * (1.0 + commission)
+                    cash -= shares * price * (1.0 + cost)
                     open_positions[ticker] = {
                         "shares": shares,
                         "entry_price": price,
@@ -392,68 +508,104 @@ def calcular_metricas(portfolio: pd.DataFrame, parameters: dict) -> tuple:
     return metrics_df, equity_df
 
 
+def _wf_metrics(series: pd.Series, label: str) -> dict:
+    """Métricas de robustez para un tramo de la curva de equity."""
+    if len(series) < 5:
+        return {
+            "periodo": label, "sharpe": 0.0,
+            "max_drawdown_pct": 0.0, "cagr_pct": 0.0, "n_dias": 0,
+        }
+    rets = series.pct_change().dropna()
+    sharpe = (
+        float(rets.mean() * 252 / (rets.std() * np.sqrt(252)))
+        if rets.std() > 0 else 0.0
+    )
+    rolling_max = series.cummax()
+    max_dd = float(((series - rolling_max) / rolling_max).min()) * 100
+    n_years = len(series) / 252
+    start_val = float(series.iloc[0])
+    end_val = float(series.iloc[-1])
+    cagr = (
+        ((end_val / start_val) ** (1.0 / n_years) - 1.0) * 100 if n_years > 0 else 0.0
+    )
+    return {
+        "periodo": label,
+        "sharpe": round(sharpe, 2),
+        "max_drawdown_pct": round(max_dd, 1),
+        "cagr_pct": round(cagr, 1),
+        "n_dias": len(series),
+    }
+
+
 def calcular_walk_forward(
     backtest_portfolio: pd.DataFrame, parameters: dict
 ) -> pd.DataFrame:
-    """Valida robustez de la estrategia comparando in-sample vs out-of-sample.
+    """Valida robustez con walk-forward MULTI-VENTANA.
 
-    Divide la curva de equity en la fecha ``walk_forward_split`` y calcula
-    Sharpe, MaxDD y CAGR para cada ventana.
+    Cambio v2 (de-overfitting): en vez de un único corte in/out-of-sample
+    (que es fácil de sobre-ajustar), parte la curva de equity en ``n_folds``
+    segmentos consecutivos de igual longitud y reporta Sharpe/MaxDD/CAGR de
+    cada uno, más la MEDIANA de Sharpe entre segmentos.
 
-    Un sistema robusto muestra métricas similares en ambas ventanas.
-    Si el out-of-sample es muy inferior, la estrategia está sobre-ajustada
-    y no es apta para dinero real.
+    La mediana de Sharpe entre folds es la métrica de selección recomendada
+    para el sweep: premia configuraciones que rinden de forma consistente en
+    el tiempo, no las que tuvieron suerte en un único tramo.
 
-    Retorna DataFrame con una fila por periodo.
+    Se conservan además las filas ``In-sample`` / ``Out-of-sample`` / ``Completo``
+    para compatibilidad con scripts existentes (run_param_sweep.py lee la fila
+    "Out-of-sample").
+
+    Retorna DataFrame con una fila por periodo/segmento + fila resumen.
     """
-    split_date_str = str(
-        parameters["backtesting"].get("walk_forward_split", "2022-01-01")
-    )
+    bt = parameters["backtesting"]
+    split_date_str = str(bt.get("walk_forward_split", "2022-01-01"))
     split_date = pd.Timestamp(split_date_str)
+    n_folds = int(bt.get("walk_forward_folds", 5))
 
     eq = backtest_portfolio["equity"].sort_index()
 
-    def _metrics(series: pd.Series, label: str) -> dict:
-        if len(series) < 5:
-            return {
-                "periodo": label, "sharpe": 0.0,
-                "max_drawdown_pct": 0.0, "cagr_pct": 0.0, "n_dias": 0,
-            }
-        rets = series.pct_change().dropna()
-        sharpe = (
-            float(rets.mean() * 252 / (rets.std() * np.sqrt(252)))
-            if rets.std() > 0 else 0.0
-        )
-        rolling_max = series.cummax()
-        max_dd = float(((series - rolling_max) / rolling_max).min()) * 100
-        n_years = len(series) / 252
-        start_val = float(series.iloc[0])
-        end_val = float(series.iloc[-1])
-        cagr = (
-            ((end_val / start_val) ** (1.0 / n_years) - 1.0) * 100 if n_years > 0 else 0.0
-        )
-        return {
-            "periodo": label,
-            "sharpe": round(sharpe, 2),
-            "max_drawdown_pct": round(max_dd, 1),
-            "cagr_pct": round(cagr, 1),
-            "n_dias": len(series),
-        }
+    rows = []
 
+    # ── Compatibilidad: in-sample / out-of-sample / completo ──────────────────
     in_sample = eq[eq.index < split_date]
     out_sample = eq[eq.index >= split_date]
+    rows.append(_wf_metrics(in_sample, f"In-sample (hasta {split_date_str})"))
+    rows.append(_wf_metrics(out_sample, f"Out-of-sample (desde {split_date_str})"))
+    rows.append(_wf_metrics(eq, "Completo"))
 
-    rows = [
-        _metrics(in_sample, f"In-sample (hasta {split_date_str})"),
-        _metrics(out_sample, f"Out-of-sample (desde {split_date_str})"),
-        _metrics(eq, "Completo"),
-    ]
+    # ── Multi-ventana: n_folds segmentos consecutivos ────────────────────────
+    fold_sharpes: list[float] = []
+    fold_cagrs: list[float] = []
+    if len(eq) >= n_folds * 5 and n_folds > 1:
+        bounds = np.linspace(0, len(eq), n_folds + 1, dtype=int)
+        for i in range(n_folds):
+            seg = eq.iloc[bounds[i]:bounds[i + 1]]
+            lo = seg.index.min().strftime("%Y-%m") if len(seg) else "?"
+            hi = seg.index.max().strftime("%Y-%m") if len(seg) else "?"
+            m = _wf_metrics(seg, f"Fold {i + 1}/{n_folds} ({lo}->{hi})")
+            rows.append(m)
+            fold_sharpes.append(m["sharpe"])
+            fold_cagrs.append(m["cagr_pct"])
+
+    # ── Resumen de robustez ──────────────────────────────────────────────────
+    if fold_sharpes:
+        median_sharpe = float(np.median(fold_sharpes))
+        min_sharpe = float(np.min(fold_sharpes))
+        median_cagr = float(np.median(fold_cagrs))
+        rows.append({
+            "periodo": "RESUMEN (mediana folds)",
+            "sharpe": round(median_sharpe, 2),
+            "max_drawdown_pct": round(min_sharpe, 2),  # reutilizado: peor Sharpe de fold
+            "cagr_pct": round(median_cagr, 1),
+            "n_dias": len(fold_sharpes),
+        })
+    else:
+        median_sharpe = 0.0
 
     result = pd.DataFrame(rows)
     logger.info(
-        "Walk-forward | In-sample Sharpe=%.2f CAGR=%.1f%% | "
-        "Out-of-sample Sharpe=%.2f CAGR=%.1f%%",
-        rows[0]["sharpe"], rows[0]["cagr_pct"],
-        rows[1]["sharpe"], rows[1]["cagr_pct"],
+        "Walk-forward multi-ventana | In-sample Sharpe=%.2f | "
+        "Out-of-sample Sharpe=%.2f | MEDIANA folds Sharpe=%.2f",
+        rows[0]["sharpe"], rows[1]["sharpe"], median_sharpe,
     )
     return result
