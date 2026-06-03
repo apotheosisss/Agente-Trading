@@ -36,6 +36,7 @@ def calcular_pesos_tsmom(clean_ohlcv: pd.DataFrame, parameters: dict) -> pd.Data
 
     last = w.iloc[-1]
     last_sig = sig.iloc[-1]
+    last_px = px.iloc[-1]
     date = w.index[-1]
     rows = []
     for ticker in w.columns:
@@ -45,6 +46,7 @@ def calcular_pesos_tsmom(clean_ohlcv: pd.DataFrame, parameters: dict) -> pd.Data
             "target_weight": round(wt, 4),
             "direction": "LONG" if wt > 1e-6 else "SHORT" if wt < -1e-6 else "FLAT",
             "signal": round(float(last_sig[ticker]), 3),
+            "price": round(float(last_px[ticker]), 4),
             "date": pd.Timestamp(date).normalize(),
             "timestamp": datetime.now(timezone.utc).isoformat(),
         })
