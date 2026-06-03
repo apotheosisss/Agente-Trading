@@ -67,7 +67,7 @@ jobs:
       - name: Run TSMOM strategy + Alpaca paper execution
         run: |
           END=$(date +%Y-%m-%d)
-          uv run kedro run --pipeline=tsmom_trade --params="start_date=2015-01-01,end_date=$END"
+          uv run kedro run --pipeline=tsmom_trade --params="start_date=2015-01-01,end_date=$END,tsmom.live_gross=2.0,tsmom.live_max_position_pct=0.5,tsmom.pvt=0.24,tsmom.max_lev=4.0"
 
       - name: Send Telegram notification
         if: always()
