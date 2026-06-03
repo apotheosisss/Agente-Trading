@@ -1,9 +1,13 @@
-name: Crypto Signals (Daily 08:00 EST)
+name: Crypto Account — TSMOM long/short (Mon-Fri)
+
+# El modelo de cripto se retiró: esta cuenta ahora corre la MISMA estrategia
+# TSMOM que Polymarket (codigo en feature/polymarket), sobre la cuenta Alpaca
+# de cripto (ALPACA_API_KEY / ALPACA_SECRET_KEY). Opera ETFs de bolsa → Lun-Vie.
 
 on:
   schedule:
-    - cron: "15 13 * * *"   # 13:15 UTC = 08:15 EST, evita congestion hora en punto
-  workflow_dispatch:          # permite ejecutar manualmente desde GitHub
+    - cron: "15 13 * * 1-5"   # 13:15 UTC = 08:15 EST (antes de apertura), solo dias habiles
+  workflow_dispatch:           # permite ejecutar manualmente desde GitHub
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
@@ -14,10 +18,10 @@ jobs:
     timeout-minutes: 30
 
     steps:
-      - name: Checkout feature/crypto
+      - name: Checkout feature/polymarket
         uses: actions/checkout@v4
         with:
-          ref: feature/crypto
+          ref: feature/polymarket
 
       - name: Install uv
         uses: astral-sh/setup-uv@v4
@@ -26,10 +30,6 @@ jobs:
 
       - name: Install dependencies
         run: uv sync
-
-      - name: Install TradingAgents (TauricResearch oficial)
-        timeout-minutes: 8
-        run: uv run pip install git+https://github.com/TauricResearch/TradingAgents.git || echo "TradingAgents no disponible — filtro de confirmacion desactivado"
 
       - name: Create credentials.yml from secrets
         env:
@@ -49,11 +49,11 @@ jobs:
                   "paper_trading": True,
               },
               "telegram": {
-                  "bot_token": os.environ["TELEGRAM_BOT_TOKEN"],
-                  "chat_id": os.environ["TELEGRAM_CHAT_ID"],
+                  "bot_token": os.environ.get("TELEGRAM_BOT_TOKEN", ""),
+                  "chat_id": os.environ.get("TELEGRAM_CHAT_ID", ""),
               },
               "openai": {
-                  "api_key": os.environ["OPENAI_API_KEY"],
+                  "api_key": os.environ.get("OPENAI_API_KEY", ""),
               },
           }
           with open("conf/local/credentials.yml", "w") as f:
@@ -61,12 +61,13 @@ jobs:
           print("credentials.yml creado correctamente")
           PYEOF
 
-      - name: Run signals + Alpaca pipelines
+      # Estrategia TSMOM long/short multi-activo + ejecucion en Alpaca paper.
+      # tsmom_trade = ingestion + tsmom (pesos objetivo) + alpaca_tsmom (ordenes delta).
+      # Se descarga desde 2015 para tener historia suficiente (reversion 504d + momentum 252d).
+      - name: Run TSMOM strategy + Alpaca paper execution
         run: |
           END=$(date +%Y-%m-%d)
-          START=$(date -d "400 days ago" +%Y-%m-%d)
-          uv run kedro run --pipeline=signals --params="start_date=$START,end_date=$END"
-          uv run kedro run --pipeline=alpaca
+          uv run kedro run --pipeline=tsmom_trade --params="start_date=2015-01-01,end_date=$END"
 
       - name: Send Telegram notification
         if: always()
@@ -82,52 +83,50 @@ jobs:
           import notifier
           import pandas as pd
 
-          signal_dir = Path("data/07_model_output")
+          d = Path("data/07_model_output")
           today = datetime.now(timezone.utc).strftime("%d %b %Y")
 
-          # Leer verified_signal (seniales que realmente llegan a Alpaca)
-          verified_files = sorted(signal_dir.rglob("verified_signal.json"), key=lambda p: p.stat().st_mtime)
-          exec_files     = sorted(signal_dir.rglob("alpaca_orders.csv"),     key=lambda p: p.stat().st_mtime)
-          account_files  = sorted(signal_dir.rglob("alpaca_account.csv"),    key=lambda p: p.stat().st_mtime)
-
-          if not verified_files:
-              notifier.send(f"Crypto Signals {today}\nPipeline ejecutado sin seniales.")
+          # ── Pesos objetivo (largos/cortos, exposicion) ──
+          wfile = d / "tsmom_weights.csv"
+          if wfile.exists():
+              w = pd.read_csv(wfile)
+              longs = int((w["target_weight"] > 1e-6).sum())
+              shorts = int((w["target_weight"] < -1e-6).sum())
+              gross = float(w["target_weight"].abs().sum())
+              w = w.reindex(w["target_weight"].abs().sort_values(ascending=False).index)
+              top = ", ".join(
+                  f"{r.ticker} {r.target_weight:+.2f}"
+                  for r in w.head(4).itertuples() if abs(r.target_weight) > 1e-6
+              ) or "ninguno"
+              sig_line = f"Largos {longs} / Cortos {shorts} | bruto {gross:.2f}x\nTop: {top}"
           else:
-              vf = pd.read_json(verified_files[-1])
-              n_buy  = int((vf["signal"] == "BUY").sum())
-              n_hold = int((vf["signal"] == "HOLD").sum())
-              n_sell = int((vf["signal"] == "SELL").sum())
-              buys = vf[vf["signal"] == "BUY"][["ticker", "confidence"]].head(3)
-              top_str = ", ".join(
-                  f"{r['ticker']} ({r['confidence']:.0%})"
-                  for _, r in buys.iterrows()
-              ) if n_buy > 0 else "ninguno"
+              sig_line = "sin pesos calculados"
 
-              # Ordenes ejecutadas en Alpaca
-              exec_str = "ninguna"
-              if exec_files:
-                  ef = pd.read_csv(exec_files[-1])
-                  ordered = ef[ef["status"] == "submitted"]["ticker"].tolist()
-                  skipped = ef[ef["status"] == "skipped"]["message"].tolist()
-                  exec_str = ", ".join(ordered) if ordered else "ninguna"
-                  if skipped and not ordered:
-                      exec_str = f"ninguna ({skipped[0]})"
+          # ── Ordenes ejecutadas (versionado → ultimo) ──
+          logs = sorted(d.rglob("tsmom_alpaca_log.csv"), key=lambda p: p.stat().st_mtime)
+          exec_str = "ninguna"
+          if logs:
+              lf = pd.read_csv(logs[-1])
+              n_sub = int((lf["status"] == "submitted").sum())
+              n_err = int((lf["status"] == "error").sum())
+              parts = []
+              if n_sub:
+                  parts.append(f"{n_sub} ordenes enviadas")
+              if n_err:
+                  parts.append(f"{n_err} errores (ver log)")
+              exec_str = " | ".join(parts) or "sin cambios"
 
-              # Estado de la cuenta
-              equity_str = ""
-              if account_files:
-                  ac = pd.read_csv(account_files[-1])
-                  equity = float(ac["equity_usd"].iloc[0])
-                  cash   = float(ac["cash_usd"].iloc[0])
-                  n_pos  = int(ac["n_positions"].iloc[0])
-                  equity_str = f"\nCuenta: ${equity:,.0f} | Cash: ${cash:,.0f} | Pos: {n_pos}"
-
-              msg = (
-                  f"Crypto Signals — {today}\n"
-                  f"BUY {n_buy} | HOLD {n_hold} | SELL {n_sell}\n"
-                  f"Top picks: {top_str}\n"
-                  f"Ejecutado: {exec_str}"
-                  f"{equity_str}"
+          # ── Estado de la cuenta ──
+          accs = sorted(d.rglob("alpaca_account.csv"), key=lambda p: p.stat().st_mtime)
+          eq_str = ""
+          if accs:
+              ac = pd.read_csv(accs[-1])
+              eq_str = (
+                  f"\nCuenta: ${float(ac['equity_usd'].iloc[0]):,.0f} | "
+                  f"Pos: {int(ac['n_positions'].iloc[0])}"
               )
-              notifier.send(msg)
+
+          notifier.send(
+              f"TSMOM (cuenta Crypto) — {today}\n{sig_line}\nEjecutado: {exec_str}{eq_str}"
+          )
           PYEOF
