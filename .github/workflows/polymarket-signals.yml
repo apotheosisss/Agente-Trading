@@ -81,48 +81,54 @@ jobs:
 
           d = Path("data/07_model_output")
           today = datetime.now(timezone.utc).strftime("%d %b %Y")
+          NL = chr(10)
 
-          # ── Pesos objetivo (largos/cortos, exposicion) ──
+          # Senal (largos/cortos)
           wfile = d / "tsmom_weights.csv"
           if wfile.exists():
               w = pd.read_csv(wfile)
               longs = int((w["target_weight"] > 1e-6).sum())
               shorts = int((w["target_weight"] < -1e-6).sum())
-              gross = float(w["target_weight"].abs().sum())
-              w = w.reindex(w["target_weight"].abs().sort_values(ascending=False).index)
-              top = ", ".join(
-                  f"{r.ticker} {r.target_weight:+.2f}"
-                  for r in w.head(4).itertuples() if abs(r.target_weight) > 1e-6
-              ) or "ninguno"
-              sig_line = f"Largos {longs} / Cortos {shorts} | bruto {gross:.2f}x\nTop: {top}"
+              sig_line = f"Senal: {longs} largos / {shorts} cortos"
           else:
-              sig_line = "sin pesos calculados"
+              sig_line = "sin pesos"
 
-          # ── Ordenes ejecutadas (versionado → ultimo) ──
-          logs = sorted(d.rglob("tsmom_alpaca_log.csv"), key=lambda p: p.stat().st_mtime)
-          exec_str = "ninguna"
-          if logs:
-              lf = pd.read_csv(logs[-1])
-              n_sub = int((lf["status"] == "submitted").sum())
-              n_err = int((lf["status"] == "error").sum())
-              parts = []
-              if n_sub:
-                  parts.append(f"{n_sub} ordenes enviadas")
-              if n_err:
-                  parts.append(f"{n_err} errores (ver log)")
-              exec_str = " | ".join(parts) or "sin cambios"
-
-          # ── Estado de la cuenta ──
+          # Cuenta + exposicion real (desde posiciones)
           accs = sorted(d.rglob("alpaca_account.csv"), key=lambda p: p.stat().st_mtime)
-          eq_str = ""
+          equity, eq_line = None, ""
           if accs:
               ac = pd.read_csv(accs[-1])
-              eq_str = (
-                  f"\nCuenta: ${float(ac['equity_usd'].iloc[0]):,.0f} | "
-                  f"Pos: {int(ac['n_positions'].iloc[0])}"
-              )
+              equity = float(ac["equity_usd"].iloc[0])
+              eq_line = f"Cuenta: ${equity:,.0f} | Pos: {int(ac['n_positions'].iloc[0])}"
+          poss = sorted(d.rglob("alpaca_positions.csv"), key=lambda p: p.stat().st_mtime)
+          if poss and equity:
+              pv = pd.read_csv(poss[-1])
+              if "market_value_usd" in pv.columns and len(pv):
+                  g = pv["market_value_usd"].abs().sum() / equity
+                  sig_line = sig_line + f" | exposicion real {g:.2f}x"
 
-          notifier.send(
-              f"TSMOM (Polymarket) — {today}\n{sig_line}\nEjecutado: {exec_str}{eq_str}"
-          )
+          # Detalle de ordenes (OK / omitidas / errores) desde el log
+          logs = sorted(d.rglob("tsmom_alpaca_log.csv"), key=lambda p: p.stat().st_mtime)
+          exec_lines = ["Ejecutado: sin ordenes"]
+          if logs:
+              lf = pd.read_csv(logs[-1])
+              sub = lf[lf["status"] == "submitted"]
+              skp = lf[lf["status"] == "skipped"]
+              err = lf[lf["status"] == "error"]
+              exec_lines = []
+              if len(sub):
+                  exec_lines.append("OK (%d): " % len(sub) + ", ".join(
+                      f"{r.ticker} {r.side}" for r in sub.itertuples()))
+              if len(skp):
+                  exec_lines.append("Omitidas (%d): " % len(skp) + ", ".join(
+                      str(r.ticker) for r in skp.itertuples()))
+              for r in err.itertuples():
+                  exec_lines.append(f"ERROR {r.ticker} {r.side}: {str(r.message)[:70]}")
+              if not exec_lines:
+                  exec_lines = ["sin cambios"]
+
+          parts = [f"TSMOM (Polymarket) — {today}", sig_line] + exec_lines
+          if eq_line:
+              parts.append(eq_line)
+          notifier.send(NL.join(parts))
           PYEOF
