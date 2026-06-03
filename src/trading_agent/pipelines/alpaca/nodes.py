@@ -349,6 +349,14 @@ def ejecutar_tsmom_alpaca(
     min_order = float(cfg.get("min_order_usd", 25.0))
 
     records: list[dict] = []
+    mode = "paper"
+
+    def rec(sym, side, target, delta, status, msg):
+        records.append({
+            "timestamp": ts, "ticker": sym, "side": side,
+            "target_usd": round(float(target), 2), "delta_usd": round(float(delta), 2),
+            "status": status, "message": msg, "mode": mode,
+        })
 
     try:
         from alpaca.trading.requests import MarketOrderRequest
@@ -359,109 +367,127 @@ def ejecutar_tsmom_alpaca(
         equity = float(account_state["equity_usd"].iloc[0])
         if equity <= 0:
             logger.error("Equity no disponible (%.2f) — abortando ejecución TSMOM", equity)
-            return pd.DataFrame([{
-                "timestamp": ts, "ticker": "", "side": "ABORT",
-                "target_usd": 0.0, "delta_usd": 0.0, "status": "no_equity",
-                "message": "account_state sin equity", "mode": mode,
-            }])
+            rec("", "ABORT", 0, 0, "no_equity", "account_state sin equity")
+            return pd.DataFrame(records)
 
-        # ── Normalizar pesos a exposición bruta segura y cap por posición ────
+        # Cancelar órdenes pendientes (liberan cantidades 'held_for_orders').
+        try:
+            client.cancel_orders()
+            logger.info("Órdenes pendientes canceladas.")
+        except Exception as exc:
+            logger.warning("No se pudieron cancelar órdenes: %s", exc)
+
+        # Precios de cierre para dimensionar cortos en ACCIONES ENTERAS.
+        price_map = {}
+        if "price" in tsmom_weights.columns:
+            price_map = dict(zip(tsmom_weights["ticker"], tsmom_weights["price"].astype(float)))
+
+        # Pesos -> exposición bruta segura + cap por posición -> USD objetivo.
         w = tsmom_weights.set_index("ticker")["target_weight"].astype(float)
         gross_raw = w.abs().sum()
         scale = (live_gross / gross_raw) if gross_raw > 0 else 0.0
         w = (w * scale).clip(-max_pos_pct, max_pos_pct)
         target_usd = (w * equity)
 
-        # ── Posiciones actuales (market_value firmado) ───────────────────────
-        cur_val: dict[str, float] = {}
+        # Posiciones actuales: market_value y qty firmados (negativo si corto).
+        cur_mv, cur_qty = {}, {}
         for p in client.get_all_positions():
-            sym = str(p.symbol)               # p.ej. "AAPL" o "BTC/USD"
+            sym = str(p.symbol)
             yf = sym.replace("/USD", "-USD") if "/USD" in sym else sym
-            cur_val[yf] = float(p.market_value)  # negativo si corto
+            cur_mv[yf] = float(p.market_value)
+            cur_qty[yf] = float(p.qty)
 
-        symbols = set(target_usd.index) | set(cur_val.keys())
+        symbols = set(target_usd.index) | set(cur_mv.keys())
         logger.info(
             "TSMOM Alpaca [%s]: equity=$%.0f | bruto objetivo=%.2fx | %d símbolos",
             mode, equity, live_gross, len(symbols),
         )
 
+        # Dos fases: ventas/cierres/cortos (liberan caja) ANTES que compras.
+        sells, buys = [], []
+
+        def o_notional(sym, side, amt, tif):
+            return lambda: client.submit_order(MarketOrderRequest(
+                symbol=sym, notional=round(amt, 2), side=side, time_in_force=tif))
+
+        def o_qty(sym, side, q, tif):
+            return lambda: client.submit_order(MarketOrderRequest(
+                symbol=sym, qty=q, side=side, time_in_force=tif))
+
+        def o_close(sym):
+            return lambda: client.close_position(sym)
+
         for yf_sym in sorted(symbols):
             alpaca_sym, is_crypto = _to_alpaca_symbol(yf_sym)
+            tif = TimeInForce.GTC if is_crypto else TimeInForce.DAY
             desired = float(target_usd.get(yf_sym, 0.0))
             if is_crypto and desired < 0:
                 desired = 0.0   # sin cortos en cripto
-            current = float(cur_val.get(yf_sym, 0.0))
+            mv = float(cur_mv.get(yf_sym, 0.0))
+            qty = float(cur_qty.get(yf_sym, 0.0))
+            price = float(price_map.get(yf_sym, 0.0))
 
-            flip = (current != 0.0) and (desired * current < 0)
-            tif = TimeInForce.GTC if is_crypto else TimeInForce.DAY
+            if desired >= 0:
+                # ── Objetivo largo (o plano) ──
+                if qty < 0:  # cubrir corto existente (cierre = acciones enteras, válido)
+                    sells.append((o_close(alpaca_sym), (yf_sym, "COVER", desired, -mv, "cubrir corto")))
+                    mv = 0.0
+                if desired < min_order:
+                    if mv >= min_order:
+                        sells.append((o_close(alpaca_sym), (yf_sym, "CLOSE", 0, -mv, "objetivo cero")))
+                    else:
+                        rec(yf_sym, "HOLD", desired, 0, "skipped", "objetivo ~0")
+                    continue
+                delta = desired - max(mv, 0.0)
+                if delta > min_order:
+                    buys.append((o_notional(alpaca_sym, OrderSide.BUY, delta, tif),
+                                 (yf_sym, "BUY", desired, delta, "abrir/ampliar largo")))
+                elif delta < -min_order:
+                    sells.append((o_notional(alpaca_sym, OrderSide.SELL, -delta, tif),
+                                  (yf_sym, "SELL", desired, delta, "reducir largo")))
+                else:
+                    rec(yf_sym, "HOLD", desired, delta, "skipped", "delta < min_order")
+            else:
+                # ── Objetivo corto (no-cripto): SIEMPRE en acciones enteras ──
+                if qty > 0:  # cerrar largo existente primero
+                    sells.append((o_close(alpaca_sym), (yf_sym, "CLOSE", desired, -mv, "cerrar largo pre-corto")))
+                    qty = 0.0
+                if price <= 0:
+                    rec(yf_sym, "SHORT", desired, 0, "skipped", "sin precio para dimensionar corto")
+                    continue
+                target_short_qty = int(abs(desired) // price)
+                cur_short_qty = int(-qty) if qty < 0 else 0
+                dq = target_short_qty - cur_short_qty
+                if target_short_qty == 0:
+                    rec(yf_sym, "SHORT", desired, 0, "skipped", "objetivo < 1 acción (corto)")
+                elif dq > 0:
+                    sells.append((o_qty(alpaca_sym, OrderSide.SELL, dq, tif),
+                                  (yf_sym, "SHORT", desired, -dq * price, f"abrir/ampliar corto {dq} acc")))
+                elif dq < 0:
+                    buys.append((o_qty(alpaca_sym, OrderSide.BUY, -dq, tif),
+                                 (yf_sym, "COVER", desired, -dq * price, f"reducir corto {-dq} acc")))
+                else:
+                    rec(yf_sym, "HOLD", desired, 0, "skipped", "corto en objetivo")
 
+        # Ejecutar: primero ventas/cierres/cortos, luego compras.
+        for action, args in sells + buys:
+            sym, side, target, delta, msg = args
             try:
-                # Caso 1: cambio de signo (de largo a corto o viceversa) → cerrar primero
-                if flip:
-                    client.close_position(alpaca_sym)
-                    records.append({
-                        "timestamp": ts, "ticker": yf_sym, "side": "CLOSE",
-                        "target_usd": round(desired, 2), "delta_usd": round(-current, 2),
-                        "status": "submitted", "message": "cierre previo a flip", "mode": mode,
-                    })
-                    current = 0.0
-
-                # Caso 2: objetivo ~0 y hay posición → cerrar
-                if abs(desired) < min_order and abs(current) >= min_order and not flip:
-                    client.close_position(alpaca_sym)
-                    records.append({
-                        "timestamp": ts, "ticker": yf_sym, "side": "CLOSE",
-                        "target_usd": 0.0, "delta_usd": round(-current, 2),
-                        "status": "submitted", "message": "objetivo cero", "mode": mode,
-                    })
-                    continue
-
-                delta = desired - current
-                if abs(delta) < min_order:
-                    records.append({
-                        "timestamp": ts, "ticker": yf_sym, "side": "HOLD",
-                        "target_usd": round(desired, 2), "delta_usd": round(delta, 2),
-                        "status": "skipped", "message": "delta < min_order", "mode": mode,
-                    })
-                    continue
-
-                side = OrderSide.BUY if delta > 0 else OrderSide.SELL
-                order = client.submit_order(MarketOrderRequest(
-                    symbol=alpaca_sym,
-                    notional=round(abs(delta), 2),
-                    side=side,
-                    time_in_force=tif,
-                ))
-                logger.info(
-                    "[%s] %s %s: $%.2f (objetivo $%.0f) id=%s",
-                    mode, side.value.upper(), yf_sym, abs(delta), desired, order.id,
-                )
-                records.append({
-                    "timestamp": ts, "ticker": yf_sym, "side": side.value.upper(),
-                    "target_usd": round(desired, 2), "delta_usd": round(delta, 2),
-                    "status": "submitted", "message": f"order_id={order.id}", "mode": mode,
-                })
+                res = action()
+                oid = getattr(res, "id", "")
+                logger.info("[%s] %s %s: $%.2f id=%s", mode, side, sym, abs(delta), oid)
+                rec(sym, side, target, delta, "submitted",
+                    (msg + (f" id={oid}" if oid else "")).strip())
             except Exception as exc:
-                logger.error("Orden TSMOM %s falló: %s", yf_sym, exc)
-                records.append({
-                    "timestamp": ts, "ticker": yf_sym, "side": "ERROR",
-                    "target_usd": round(desired, 2), "delta_usd": 0.0,
-                    "status": "error", "message": str(exc), "mode": mode,
-                })
+                logger.error("Orden TSMOM %s (%s) falló: %s", sym, side, exc)
+                rec(sym, side, target, delta, "error", str(exc))
 
     except ImportError:
         logger.warning("alpaca-py no instalado — instala con: pip install alpaca-py")
-        records.append({
-            "timestamp": ts, "ticker": "", "side": "HOLD", "target_usd": 0.0,
-            "delta_usd": 0.0, "status": "simulated", "message": "alpaca-py no disponible",
-            "mode": "paper_sim",
-        })
+        rec("", "HOLD", 0, 0, "simulated", "alpaca-py no disponible")
     except Exception as exc:
         logger.error("Error en ejecución TSMOM Alpaca: %s", exc)
-        records.append({
-            "timestamp": ts, "ticker": "", "side": "ERROR", "target_usd": 0.0,
-            "delta_usd": 0.0, "status": "error", "message": str(exc), "mode": "unknown",
-        })
+        rec("", "ERROR", 0, 0, "error", str(exc))
 
     n_sub = sum(1 for r in records if r["status"] == "submitted")
     logger.info("TSMOM Alpaca: %d órdenes enviadas | %d registros", n_sub, len(records))
