@@ -322,6 +322,16 @@ def _to_alpaca_symbol(ticker: str) -> tuple[str, bool]:
     return ticker, False
 
 
+def _is_shortable(client, symbol: str) -> bool:
+    """True si el activo se puede vender corto en la cuenta (evita errores
+    recurrentes con ETFs no prestables, p. ej. FXY)."""
+    try:
+        a = client.get_asset(symbol)
+        return bool(getattr(a, "tradable", True)) and bool(getattr(a, "shortable", False))
+    except Exception:
+        return False
+
+
 def ejecutar_tsmom_alpaca(
     tsmom_weights: pd.DataFrame,
     account_state: pd.DataFrame,
@@ -461,8 +471,11 @@ def ejecutar_tsmom_alpaca(
                 if target_short_qty == 0:
                     rec(yf_sym, "SHORT", desired, 0, "skipped", "objetivo < 1 acción (corto)")
                 elif dq > 0:
-                    sells.append((o_qty(alpaca_sym, OrderSide.SELL, dq, tif),
-                                  (yf_sym, "SHORT", desired, -dq * price, f"abrir/ampliar corto {dq} acc")))
+                    if not _is_shortable(client, alpaca_sym):
+                        rec(yf_sym, "SHORT", desired, 0, "skipped", "no shortable en Alpaca")
+                    else:
+                        sells.append((o_qty(alpaca_sym, OrderSide.SELL, dq, tif),
+                                      (yf_sym, "SHORT", desired, -dq * price, f"abrir/ampliar corto {dq} acc")))
                 elif dq < 0:
                     buys.append((o_qty(alpaca_sym, OrderSide.BUY, -dq, tif),
                                  (yf_sym, "COVER", desired, -dq * price, f"reducir corto {-dq} acc")))
