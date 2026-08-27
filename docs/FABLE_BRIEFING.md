@@ -30,9 +30,12 @@ El nombre "Crypto" es historia — ya no es un modelo cripto, ver §3.
 
 Rama por defecto en GitHub: **`develop`** (ahí vive el CI/CD real). `main` se
 mantiene sincronizada por higiene pero no ejecuta nada. El código de estrategia
-vive en `feature/polymarket`. La rama `feature/crypto` está **huérfana**: nadie
-la referencia en producción; contiene un diseño anterior (ver §2) y puede
-archivarse o borrarse sin impacto.
+vive en `feature/polymarket`. La antigua rama `feature/crypto` (diseño anterior,
+ver §2) fue **archivada el 2026-08-27** como tag `archive/feature-crypto` y
+borrada del remoto; recuperable con
+`git checkout -b feature/crypto archive/feature-crypto`. Las ramas de trabajo
+ya mergeadas (feature/tsmom-strategy, feature/alpaca-tsmom-exec, chore/*)
+también se podaron — el repo queda en develop + feature/polymarket + main.
 
 ---
 
@@ -145,6 +148,41 @@ que hayan pasado ≥60-90 días de paper trading limpio (sin cambios de config
 en medio) Y sin medir explícitamente que el tracking real vs. backtest es
 aceptable. Subir gradual (1.0 → 1.3 → 1.5), nunca de un salto a 2x.
 
+**Nota de timing:** el cron del 2026-08-27 (retrasado por GitHub hasta las
+22:58 UTC) disparó 23 minutos ANTES del push del fix, así que ese día corrió
+con 2x por última vez. **El primer run a 1x de la cuenta Crypto es el
+2026-08-28** — esa es la fecha baseline para el período de validación limpio.
+
+## 4b. Bug de churn cripto (encontrado y corregido 2026-08-27)
+
+Revisando los logs de Actions (item de §7): el adaptador delta TSMOM solo
+normalizaba `ETH/USD → ETH-USD`, pero Alpaca devuelve posiciones cripto SIN
+separador (`ETHUSD`). La posición quedaba como símbolo huérfano (objetivo 0 →
+CLOSE) y el objetivo `ETH-USD` como posición inexistente (→ BUY completo):
+**cada run diario cerraba y recompraba la posición cripto entera**, pagando
+spread ×2/día (verificado: `CLOSE ETHUSD $164` + `BUY ETH-USD $169` en los
+runs del 26 y 27 ago). Con el peso cripto actual (~$170, la vol-targeting
+asigna poco a activos de alta vol) el coste eran centavos, pero escalaba
+linealmente con el peso. Mismo bug de normalización ya corregido en mayo en
+el adaptador legacy, reintroducido en el nuevo. Fix: commit `ab2708c` en
+`feature/polymarket` (normalización de 3 variantes + test). Polymarket no lo
+sufría: a $10k de equity su objetivo cripto queda bajo `min_order_usd`.
+
+## 4c. Primer chequeo de tracking real vs. backtest (2026-08-27)
+
+Del log de Actions (~86 días desde el despliegue TSMOM del 2026-06-02):
+
+| Cuenta | Config del período | Equity | Retorno | Esperado backtest |
+|---|---|---|---|---|
+| Polymarket | 1x limpio | $10,226 | **+2.3%** | ~+2.9% ± 6% (1σ) |
+| Crypto | 2x no validado | $95,940 | **-4.1%** | (sin backtest a 2x) |
+
+**Polymarket trackea el backtest casi perfecto** — el Gate de Fase E va bien
+encaminado en la cuenta limpia. La divergencia de Crypto es coherente con el
+apalancamiento no validado (doble varianza + vol drag), no con un fallo del
+motor: misma estrategia, mismo período, resultados opuestos según leverage.
+Es la evidencia empírica más clara a favor de la regla de §4.
+
 ---
 
 ## 5. Contexto de mercado 2026 (para no repetir el sesgo del Hantavirus)
@@ -214,14 +252,16 @@ diseño. Lo que sí se corrigió fue el apalancamiento prematuro (§4).
 ## 7. Qué SÍ vigilar / próximos pasos razonables
 
 - Dejar correr ambas cuentas sin tocar config hasta completar 60-90 días
-  desde 2026-08-27 (idealmente hasta fin de octubre / noviembre 2026).
-- Revisar `tsmom_alpaca_log.csv` de tanto en tanto por errores de ejecución
-  (activos no shorteables en paper — ya se manejan con try/except aislado,
-  pero vale la pena confirmar cuáles fallan y por qué).
-- Comparar tracking real (equity de Alpaca) vs. lo que predice
-  `tsmom_validation.csv` — es el Gate de la Fase E del propio plan.
-- Decidir qué hacer con la rama huérfana `feature/crypto` (archivar/borrar;
-  no tiene impacto en producción, es solo higiene).
+  desde el **2026-08-28** (primer run limpio a 1x en ambas; idealmente hasta
+  fin de octubre / noviembre 2026).
+- ✅ ~~Revisar `tsmom_alpaca_log.csv` por errores de ejecución~~ — hecho
+  2026-08-27: sin errores de shorts en runs recientes; se encontró y corrigió
+  el bug de churn cripto (§4b). Repetir el chequeo de logs ~mensualmente.
+- ✅ ~~Primer chequeo de tracking real vs. backtest~~ — hecho 2026-08-27,
+  resultados en §4c (Polymarket on-track). Repetir al cierre del período de
+  validación con la serie completa de equity.
+- ✅ ~~Rama huérfana `feature/crypto`~~ — archivada como tag y borrada
+  (2026-08-27, ver §1).
 - Limpieza opcional de bajo riesgo: si en algún momento se quiere borrar de
   verdad el código legacy (LLM/TradingAgents/Polymarket-sentiment, pipeline
   `llm_agents`, `alpaca` long-only), hacerlo en una rama aparte con tests,
