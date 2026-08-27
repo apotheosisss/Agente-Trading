@@ -65,7 +65,7 @@ El proyecto mantiene **dos ramas activas** con modelos independientes:
 | Parámetro | Valor |
 |---|---|
 | Universo | 11 activos: BTC, ETH, BNB, XRP, SOL, AVAX, LINK, DOGE, LTC, COIN, SPY |
-| Enfoque | Ciclos bull/bear de criptomonedas — SPY actúa como suelo económico |
+| Enfoque | Ciclos bull/bear de criptomonedas con SPY como ancla macro |
 | Frecuencia | Diario — **09:15 AM CLT** (13:15 UTC) |
 | Max posiciones | 2 |
 | Cuenta Alpaca | `ALPACA_API_KEY` |
