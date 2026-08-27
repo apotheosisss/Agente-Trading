@@ -400,10 +400,18 @@ def ejecutar_tsmom_alpaca(
         target_usd = (w * equity)
 
         # Posiciones actuales: market_value y qty firmados (negativo si corto).
+        # Alpaca devuelve cripto SIN separador (ETHUSD, BTCUSD) — normalizar a
+        # formato yfinance (ETH-USD) o el delta nunca matchea el objetivo y el
+        # adaptador cierra+recompra la posicion entera CADA run (churn diario).
         cur_mv, cur_qty = {}, {}
         for p in client.get_all_positions():
             sym = str(p.symbol)
-            yf = sym.replace("/USD", "-USD") if "/USD" in sym else sym
+            if "/" in sym:
+                yf = sym.replace("/", "-")                # ETH/USD -> ETH-USD
+            elif sym.endswith("USD") and len(sym) > 3 and "-" not in sym:
+                yf = sym[:-3] + "-USD"                    # ETHUSD  -> ETH-USD
+            else:
+                yf = sym
             cur_mv[yf] = float(p.market_value)
             cur_qty[yf] = float(p.qty)
 
