@@ -64,10 +64,16 @@ jobs:
       # Estrategia TSMOM long/short multi-activo + ejecucion en Alpaca paper.
       # tsmom_trade = ingestion + tsmom (pesos objetivo) + alpaca_tsmom (ordenes delta).
       # Se descarga desde 2015 para tener historia suficiente (reversion 504d + momentum 252d).
+      #
+      # De-apalancado 2026-08-27: el perfil "AGRESIVO" (2x gross, 24% vol objetivo)
+      # se activo el mismo dia del despliegue (2026-06-02) sin validar, violando
+      # el propio PLAN_RENTABILIDAD.md ("subir leverage solo tras validar en paper").
+      # Se revierte a la config base (identica a la cuenta Polymarket) hasta
+      # completar >=60-90 dias de paper trading limpio. Ver docs/FABLE_BRIEFING.md.
       - name: Run TSMOM strategy + Alpaca paper execution
         run: |
           END=$(date +%Y-%m-%d)
-          uv run kedro run --pipeline=tsmom_trade --params="start_date=2015-01-01,end_date=$END,tsmom.live_gross=2.0,tsmom.live_max_position_pct=0.5,tsmom.pvt=0.24,tsmom.max_lev=4.0"
+          uv run kedro run --pipeline=tsmom_trade --params="start_date=2015-01-01,end_date=$END"
 
       - name: Send Telegram notification
         if: always()
