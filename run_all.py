@@ -1,5 +1,11 @@
 """
-Lanzador unificado — ejecuta ambas estrategias en secuencia.
+⚠️ OBSOLETO desde 2026-06-02: orquesta `scheduler.py` en la rama `feature/crypto`,
+que fue retirada y borrada (archivada como tag `archive/feature-crypto`) — la
+ruta `.claude/worktrees/wonderful-villani-fa15cf/` ya no existe. Ambas cuentas
+corren la misma estrategia TSMOM vía GitHub Actions (`kedro run
+--pipeline=tsmom_trade`), no via este script. Ver docs/FABLE_BRIEFING.md.
+
+Lanzador unificado — ejecuta ambas estrategias en secuencia (LEGADO).
 
 Uso:
     uv run python run_all.py              # ejecutar ambas ramas

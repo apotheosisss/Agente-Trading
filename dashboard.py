@@ -1,5 +1,12 @@
 """
-Dashboard de monitoreo — Trading Agent.
+⚠️ OBSOLETO desde 2026-06-02: lee `signal.json` y pide correr `scheduler.py`,
+ambos del pipeline LLM legado (ver AUDITORIA_HALLAZGOS.md). La estrategia en
+producción (TSMOM) escribe `tsmom_weights.csv` / `tsmom_orders.csv` /
+`tsmom_alpaca_log.csv` — este dashboard no los lee y mostrará datos viejos o
+nada. Ver docs/FABLE_BRIEFING.md para el estado real del sistema. Conservado
+sin borrar por si se quiere adaptar a TSMOM a futuro, no por vigencia actual.
+
+Dashboard de monitoreo — Trading Agent (LEGADO).
 
 Uso:
     uv run streamlit run dashboard.py
