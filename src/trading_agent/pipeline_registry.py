@@ -14,10 +14,17 @@ _BACKTEST_PIPELINES = {"backtesting"}
 def register_pipelines() -> dict[str, Pipeline]:
     """Register the project's pipelines.
 
-    Pipelines disponibles:
-    - __default__  : pipeline completo (señales + backtesting)
-    - signals      : solo señales en vivo, sin backtesting (~30s vs ~70s)
-    - alpaca       : ejecucion real via Alpaca (requiere credenciales)
+    Pipelines de PRODUCCIÓN (usar estos):
+    - tsmom_live   : ingestion + tsmom — calcula pesos objetivo, sin ejecutar ordenes
+    - tsmom_trade  : ingestion + tsmom + alpaca_tsmom — calcula Y ejecuta en Alpaca
+                     (esto es lo que corren los workflows de GitHub Actions)
+    - alpaca_tsmom : solo ejecucion, con tsmom_weights ya calculado
+
+    Pipelines LEGADO (congelados desde 2026-06, ver AUDITORIA_HALLAZGOS.md —
+    conservados como referencia/comparacion, NO usar para operar):
+    - __default__  : pipeline completo LLM (señales + backtesting)
+    - signals      : señales via agentes LLM, sin backtesting
+    - alpaca       : ejecucion long-only via el modelo LLM viejo
 
     Returns:
         A mapping from pipeline names to ``Pipeline`` objects.
