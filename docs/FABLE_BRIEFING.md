@@ -150,8 +150,24 @@ aceptable. Subir gradual (1.0 → 1.3 → 1.5), nunca de un salto a 2x.
 
 **Nota de timing:** el cron del 2026-08-27 (retrasado por GitHub hasta las
 22:58 UTC) disparó 23 minutos ANTES del push del fix, así que ese día corrió
-con 2x por última vez. **El primer run a 1x de la cuenta Crypto es el
-2026-08-28** — esa es la fecha baseline para el período de validación limpio.
+con 2x por última vez. El primer run a 1x fue el 2026-08-28, pero heredó el
+equity de la cuenta vieja (~$96k, arrastrando el historial del período 2x).
+
+**Reset real de cuenta (2026-09-01):** Alpaca eliminó el botón de "Reset" al
+introducir soporte multi-cuenta paper — ahora hay que crear una cuenta paper
+nueva en vez de resetear la existente (confirmado por soporte de Alpaca,
+[foro](https://forum.alpaca.markets/t/not-able-to-reset-my-alpaca-paper-account/16434)).
+Claudio creó una cuenta paper nueva (arranca en $100k por defecto, 0
+posiciones), regeneró `ALPACA_API_KEY`/`ALPACA_SECRET_KEY` en los GitHub
+Secrets, y se disparó un run manual (`workflow_dispatch`, id `33545583676`,
+2026-09-01 18:46 UTC) para verificar. Confirmado limpio:
+`equity=$100000.00 | cash=$100000.00 | posiciones=0` antes de operar,
+`objetivo=1.00x`, sin errores de auth con las keys nuevas.
+
+**Esta es la fecha baseline real y definitiva para el período de validación
+de 60-90 días: 2026-09-01.** Los datos del 27/8 al 1/9 (cuenta vieja, ~$96k)
+sirvieron para confirmar que los fixes de leverage y churn funcionan, pero no
+cuentan para el reloj de validación — ese arranca de cero hoy.
 
 ## 4b. Bug de churn cripto (encontrado y corregido 2026-08-27)
 
